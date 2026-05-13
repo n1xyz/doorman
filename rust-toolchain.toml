@@ -1,0 +1,6 @@
+[toolchain]
+channel = "1.93.1"
+
+# Includes rustfmt, clippy, rust-docs.
+profile = "default"
+components = ["rust-analyzer"]
