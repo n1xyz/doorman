@@ -5,4 +5,7 @@ edition = "2024"
 
 [dependencies]
 ahash = "0.8"
+forwarded-header-value = "0.1.1"
 governor = { version = "0.10.4", features = ["dashmap"] }
+http = "1"
+ipnet = "2.11.0"

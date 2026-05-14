@@ -1,6 +1,7 @@
 //! Reusable rate limiting primitives.
 
 pub mod error;
+pub mod http;
 pub mod key;
 pub mod limiter;
 pub mod policy;
