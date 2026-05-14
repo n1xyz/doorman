@@ -32,6 +32,12 @@ impl<S> Layer<S> for RateLimitLayer {
     }
 }
 
+impl RateLimitLayer {
+    pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
+        Self { limiter, extractor }
+    }
+}
+
 impl<S, B> Service<Request<B>> for RateLimitService<S>
 where
     S: Service<Request<B>, Response = Response<B>>,
@@ -99,13 +105,9 @@ fn rate_limited_response<B: Default>(err: RateLimitError) -> Response<B> {
         .expect("response builder with static status should not fail");
 
     if let Some(retry_after) = err.retry_after() {
-        response.headers_mut().insert(
-            RETRY_AFTER,
-            retry_after
-                .as_secs()
-                .saturating_add(1)
-                .into(),
-        );
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, retry_after.as_secs().saturating_add(1).into());
     }
 
     response
