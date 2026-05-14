@@ -42,7 +42,9 @@ where
             .map_err(|err| RateLimitError::new(err.wait_time_from(self.inner.clock().now())))
     }
 
-    pub fn retain_recent(&self) {}
+    pub fn retain_recent(&self) {
+        self.inner.retain_recent();
+    }
 }
 
 impl<K, C> RateLimiter<K, Requests, C>
@@ -52,5 +54,77 @@ where
 {
     pub fn check_request(&self, key: &K) -> Result<(), RateLimitError> {
         self.check(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::limiter;
+
+    use super::*;
+    use governor::clock::FakeRelativeClock;
+    use std::num::NonZeroU32;
+    use std::time::Duration;
+
+    fn make_limiter(
+        burst: u32,
+    ) -> (
+        RateLimiter<u64, Requests, FakeRelativeClock>,
+        FakeRelativeClock,
+    ) {
+        let clock = FakeRelativeClock::default();
+        let policy =
+            Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(burst).unwrap());
+        let limiter = RateLimiter::with_clock(policy, clock.clone());
+        (limiter, clock)
+    }
+
+    #[test]
+    fn allows_requests_under_quota() {
+        let (limiter, _) = make_limiter(1);
+
+        assert!(limiter.check_request(&1).is_ok());
+    }
+
+    #[test]
+    fn denies_requests_over_quota() {
+        let (limiter, _) = make_limiter(1);
+
+        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.check_request(&1).is_err());
+    }
+
+    #[test]
+    fn independent_keys_have_independent_quota() {
+        let (limiter, _) = make_limiter(1);
+
+        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.check_request(&1).is_err());
+
+        assert!(limiter.check_request(&2).is_ok());
+    }
+
+    #[test]
+    fn quota_replenishes_after_time() {
+        let (limiter, clock) = make_limiter(1);
+
+        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.check_request(&1).is_err());
+
+        clock.advance(Duration::from_secs(1));
+
+        assert!(limiter.check_request(&1).is_ok());
+    }
+
+    #[test]
+    fn retain_recent_doesnt_panic() {
+        let (limiter, clock) = make_limiter(1);
+
+        assert!(limiter.check_request(&1).is_ok());
+
+        clock.advance(Duration::from_secs(60));
+        limiter.retain_recent();
+
+        assert!(limiter.check_request(&1).is_ok());
     }
 }
