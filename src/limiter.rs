@@ -4,7 +4,7 @@ use governor::clock::{Clock, DefaultClock};
 use governor::middleware::NoOpMiddleware;
 use std::hash::Hash;
 use std::marker::PhantomData;
-
+use std::num::NonZeroU32;
 type StateStore<K> = governor::state::keyed::DashMapStateStore<K, ahash::RandomState>;
 
 /// A keyed rate limiter for one policy and one unit type.
@@ -36,10 +36,21 @@ where
             _unit: PhantomData,
         }
     }
-    pub fn check(&self, key: &K) -> Result<(), RateLimitError> {
+    pub fn check_and_consume_one(&self, key: &K) -> Result<(), RateLimitError> {
         self.inner
             .check_key(key)
             .map_err(|err| RateLimitError::new(err.wait_time_from(self.inner.clock().now())))
+    }
+
+    pub fn check_and_consume_n(&self, key: &K, units: NonZeroU32) -> Result<(), RateLimitError> {
+        match self.inner.check_key_n(key, units) {
+            Ok(Ok(())) => Ok(()),
+
+            Ok(Err(not_until)) => Err(RateLimitError::new(
+                not_until.wait_time_from(self.inner.clock().now()),
+            )),
+            Err(_insufficient_capacity) => Err(RateLimitError::InsufficientCapacity),
+        }
     }
 
     pub fn retain_recent(&self) {
@@ -53,14 +64,12 @@ where
     C: Clock,
 {
     pub fn check_request(&self, key: &K) -> Result<(), RateLimitError> {
-        self.check(key)
+        self.check_and_consume_one(key)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::limiter;
-
     use super::*;
     use governor::clock::FakeRelativeClock;
     use std::num::NonZeroU32;
