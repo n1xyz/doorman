@@ -37,19 +37,17 @@ where
         }
     }
     pub fn check_and_consume_one(&self, key: &K) -> Result<(), RateLimitError> {
-        self.inner
-            .check_key(key)
-            .map_err(|err| RateLimitError::new(err.wait_time_from(self.inner.clock().now())))
+        self.check_and_consume_n(key, NonZeroU32::new(1).unwrap())
     }
 
     pub fn check_and_consume_n(&self, key: &K, units: NonZeroU32) -> Result<(), RateLimitError> {
         match self.inner.check_key_n(key, units) {
             Ok(Ok(())) => Ok(()),
 
-            Ok(Err(not_until)) => Err(RateLimitError::new(
-                not_until.wait_time_from(self.inner.clock().now()),
-            )),
-            Err(_insufficient_capacity) => Err(RateLimitError::InsufficientCapacity),
+            Ok(Err(not_until)) => Err(RateLimitError::Limited {
+                retry_after: not_until.wait_time_from(self.inner.clock().now()),
+            }),
+            Err(_) => Err(RateLimitError::InsufficientCapacity),
         }
     }
 
@@ -70,6 +68,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::limiter;
+
     use super::*;
     use governor::clock::FakeRelativeClock;
     use std::num::NonZeroU32;
@@ -135,5 +135,27 @@ mod tests {
         limiter.retain_recent();
 
         assert!(limiter.check_request(&1).is_ok());
+    }
+
+    #[test]
+    fn allows_n_requests_under_quota() {
+        let (limiter, _) = make_limiter(20);
+
+        assert!(
+            limiter
+                .check_and_consume_n(&1, NonZeroU32::new(20).unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn denies_n_requests_over_quota() {
+        let (limiter, _) = make_limiter(20);
+
+        assert!(
+            limiter
+                .check_and_consume_n(&1, NonZeroU32::new(40).unwrap())
+                .is_err()
+        );
     }
 }
