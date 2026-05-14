@@ -45,9 +45,9 @@ where
         match self.inner.check_key_n(key, units) {
             Ok(Ok(())) => Ok(()),
 
-            Ok(Err(not_until)) => Err(RateLimitError::Limited {
-                retry_after: not_until.wait_time_from(self.inner.clock().now()),
-            }),
+            Ok(Err(not_until)) => Err(RateLimitError::limited(
+                not_until.wait_time_from(self.inner.clock().now()),
+            )),
             Err(_) => Err(RateLimitError::InsufficientCapacity),
         }
     }
@@ -135,7 +135,8 @@ mod tests {
         let (limiter, _) = make_request_limiter(1);
 
         assert!(limiter.check_request(&1).is_ok());
-        assert!(limiter.check_request(&1).is_err());
+        let err = limiter.check_request(&1).unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
     }
 
     #[test]
@@ -143,7 +144,8 @@ mod tests {
         let (limiter, _) = make_request_limiter(1);
 
         assert!(limiter.check_request(&1).is_ok());
-        assert!(limiter.check_request(&1).is_err());
+        let err = limiter.check_request(&1).unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
 
         assert!(limiter.check_request(&2).is_ok());
     }
@@ -153,7 +155,8 @@ mod tests {
         let (limiter, clock) = make_request_limiter(1);
 
         assert!(limiter.check_request(&1).is_ok());
-        assert!(limiter.check_request(&1).is_err());
+        let err = limiter.check_request(&1).unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
 
         clock.advance(Duration::from_secs(1));
 
@@ -187,11 +190,11 @@ mod tests {
     fn denies_n_requests_over_quota() {
         let (limiter, _) = make_request_limiter(20);
 
-        assert!(
-            limiter
-                .check_and_consume_n(&1, NonZeroU32::new(40).unwrap())
-                .is_err()
-        );
+        let err = limiter
+            .check_and_consume_n(&1, NonZeroU32::new(40).unwrap())
+            .unwrap_err();
+
+        assert!(matches!(err, RateLimitError::InsufficientCapacity));
     }
 
     #[test]
@@ -203,7 +206,9 @@ mod tests {
                 .check_and_consume_n(&1, NonZeroU32::new(3).unwrap())
                 .is_ok()
         );
-        assert!(limiter.check_and_consume_one(&1).is_err());
+        let err = limiter.check_and_consume_one(&1).unwrap_err();
+
+        assert!(matches!(err, RateLimitError::Limited { .. }));
     }
 
     #[test]
@@ -227,11 +232,10 @@ mod tests {
                 .consume_duration(&1, Duration::from_nanos(1))
                 .is_ok()
         );
-        assert!(
-            limiter
-                .consume_duration(&1, Duration::from_millis(1))
-                .is_err()
-        );
+        let err = limiter
+            .consume_duration(&1, Duration::from_millis(1))
+            .unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
     }
 
     #[test]
@@ -243,10 +247,9 @@ mod tests {
                 .consume_duration(&1, Duration::from_millis(3))
                 .is_ok()
         );
-        assert!(
-            limiter
-                .consume_duration(&1, Duration::from_millis(1))
-                .is_err()
-        );
+        let err = limiter
+            .consume_duration(&1, Duration::from_millis(1))
+            .unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
     }
 }
