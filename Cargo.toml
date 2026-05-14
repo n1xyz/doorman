@@ -9,4 +9,7 @@ forwarded-header-value = "0.1.1"
 governor = { version = "0.10.4", features = ["dashmap"] }
 http = "1"
 ipnet = "2.11.0"
-tower = "0.5.3"
+tower = { version = "0.5.3", features = ["util"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
