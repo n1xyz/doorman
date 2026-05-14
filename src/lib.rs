@@ -8,4 +8,4 @@ pub mod units;
 pub use error::RateLimitError;
 pub use limiter::RateLimiter;
 pub use policy::Policy;
-pub use units::{RequestRateLimiter, Requests};
+pub use units::{DurationBudgetLimiter, DurationUnits, RequestRateLimiter, Requests};
