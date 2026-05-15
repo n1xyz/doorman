@@ -150,18 +150,9 @@ mod tests {
         SocketAddr::new(ip.parse().unwrap(), 12345)
     }
 
-    fn ok_service() -> impl Service<
-        Request<()>,
-        Response = Response<()>,
-        Error = Infallible,
-    > {
+    fn ok_service() -> impl Service<Request<()>, Response = Response<()>, Error = Infallible> {
         service_fn(|_req: Request<()>| async {
-            Ok::<_, Infallible>(
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(())
-                    .unwrap(),
-            )
+            Ok::<_, Infallible>(Response::builder().status(StatusCode::OK).body(()).unwrap())
         })
     }
 
