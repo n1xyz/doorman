@@ -70,6 +70,33 @@ db_budget.consume_duration(&key, Duration::from_millis(40))?;
 # Ok::<(), doorman::RateLimitError>(())
 ```
 
+### Timing Scoped Work
+
+For work where the cost is elapsed wall-clock time, create a timer before the
+work and explicitly consume it after the work finishes.
+
+```rust
+# use doorman::{DurationBudgetLimiter, IpKey, Policy};
+# use std::net::IpAddr;
+# use std::num::NonZeroU32;
+# let policy = Policy::per_second(
+#     NonZeroU32::new(2_000).unwrap(),
+#     NonZeroU32::new(2_000).unwrap(),
+# );
+# let db_budget = DurationBudgetLimiter::<IpKey>::new(policy);
+# let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
+let timer = db_budget.start_timer(&key);
+
+// run_db_query().await;
+
+timer.consume_elapsed()?;
+# Ok::<(), doorman::RateLimitError>(())
+```
+
+Timers do not charge on drop. Call `consume_elapsed` explicitly. The timer
+borrows the limiter and key, so both must live until the elapsed duration is
+charged.
+
 Duration charging rules:
 
 ```text

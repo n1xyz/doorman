@@ -5,7 +5,7 @@ use governor::middleware::NoOpMiddleware;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 type StateStore<K> = governor::state::keyed::DashMapStateStore<K, ahash::RandomState>;
 
 /// A keyed rate limiter for one policy and one unit type.
@@ -87,6 +87,41 @@ where
             NonZeroU32::new(millis).unwrap()
         };
         self.check_and_consume_n(key, units)
+    }
+}
+
+pub struct DurationTimer<'a, K, C>
+where
+    K: Eq + Hash + Clone,
+    C: Clock,
+{
+    limiter: &'a RateLimiter<K, DurationUnits, C>,
+    key: &'a K,
+    start: Instant,
+}
+
+impl<K, C> RateLimiter<K, DurationUnits, C>
+where
+    K: Eq + Hash + Clone,
+    C: Clock,
+{
+    pub fn start_timer<'a>(&'a self, key: &'a K) -> DurationTimer<'a, K, C> {
+        DurationTimer {
+            limiter: self,
+            key,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl<'a, K, C> DurationTimer<'a, K, C>
+where
+    K: Eq + Hash + Clone,
+    C: Clock,
+{
+    pub fn consume_elapsed(self) -> Result<(), RateLimitError> {
+        self.limiter
+            .consume_duration(self.key, self.start.elapsed())
     }
 }
 
@@ -247,6 +282,20 @@ mod tests {
                 .consume_duration(&1, Duration::from_millis(3))
                 .is_ok()
         );
+        let err = limiter
+            .consume_duration(&1, Duration::from_millis(1))
+            .unwrap_err();
+        assert!(matches!(err, RateLimitError::Limited { .. }));
+    }
+
+    #[test]
+    fn timer_consume_elapsed_charges_duration_budget() {
+        let (limiter, _) = make_duration_limiter(1);
+
+        let timer = limiter.start_timer(&1);
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(timer.consume_elapsed().is_ok());
+
         let err = limiter
             .consume_duration(&1, Duration::from_millis(1))
             .unwrap_err();
