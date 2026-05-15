@@ -6,8 +6,8 @@ pub enum Requests {}
 /// A rate limiter where one unit represents one request.
 pub type RequestRateLimiter<K> = RateLimiter<K, Requests>;
 
-/// Unit market for duration-budget rate limiting.
+/// Unit marker for duration-budget rate limiting.
 pub enum DurationUnits {}
 
-/// A rate limiter where one unit represents one millisecond
+/// A rate limiter where one unit represents one millisecond.
 pub type DurationBudgetLimiter<K> = RateLimiter<K, DurationUnits>;

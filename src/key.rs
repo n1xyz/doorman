@@ -1,8 +1,15 @@
 use std::net::IpAddr;
 
+/// Key type for IP-based rate limiting.
+///
+/// IPv4 addresses are keyed exactly. IPv6 addresses are grouped by /56 prefix
+/// to avoid treating every IPv6 address as an independent client.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IpKey {
+    /// Exact IPv4 address bits.
     V4(u32),
+
+    /// IPv6 /56 prefix represented as a `u64`.
     V6(u64),
 }
 

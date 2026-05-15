@@ -11,6 +11,11 @@ use tower::{Layer, Service};
 use crate::http::extract::split_nets;
 use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
 
+/// Tower layer for fixed-cost request rate limiting by client IP.
+///
+/// The layer extracts an [`IpKey`], optionally bypasses whitelisted IPs, checks
+/// one request unit, and stores the `IpKey` in request extensions before calling
+/// the inner service.
 pub struct RateLimitLayer {
     limiter: Arc<RequestRateLimiter<IpKey>>,
     extractor: ClientIpExtractor,
@@ -18,6 +23,7 @@ pub struct RateLimitLayer {
     whitelist_v6: Box<[Ipv6Net]>,
 }
 
+/// Service produced by [`RateLimitLayer`].
 pub struct RateLimitService<S> {
     inner: S,
     limiter: Arc<RequestRateLimiter<IpKey>>,
@@ -41,6 +47,7 @@ impl<S> Layer<S> for RateLimitLayer {
 }
 
 impl RateLimitLayer {
+    /// Creates a request rate-limit layer.
     pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
         Self {
             limiter,
@@ -50,6 +57,9 @@ impl RateLimitLayer {
         }
     }
 
+    /// Adds IP networks that bypass this layer's request limiter.
+    ///
+    /// Whitelisting is scoped to this layer only.
     pub fn with_whitelist(mut self, whitelist: impl IntoIterator<Item = IpNet>) -> Self {
         let (whitelist_v4, whitelist_v6) = split_nets(whitelist);
         self.whitelist_v4 = whitelist_v4;

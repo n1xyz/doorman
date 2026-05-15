@@ -4,6 +4,9 @@ use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use std::net::{IpAddr, SocketAddr};
 
 /// Extracts the real client IP from peer connection info and HTTP proxy headers.
+///
+/// Forwarding headers are trusted only when the peer IP is in the configured
+/// trusted proxy networks.
 #[derive(Clone, Debug)]
 pub struct ClientIpExtractor {
     trusted_v4: Box<[Ipv4Net]>,
@@ -13,10 +16,12 @@ pub struct ClientIpExtractor {
 /// Error returned when a client IP cannot be extracted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExtractClientIpError {
+    /// The peer is trusted, but no usable forwarded client IP header was found.
     MissingForwardedClientIp,
 }
 
 impl ClientIpExtractor {
+    /// Creates an extractor with the trusted proxy networks.
     pub fn new(trusted_proxies: impl IntoIterator<Item = IpNet>) -> Self {
         let (trusted_v4, trusted_v6) = split_nets(trusted_proxies);
         Self {
@@ -25,6 +30,10 @@ impl ClientIpExtractor {
         }
     }
 
+    /// Extracts the real client IP for a request.
+    ///
+    /// If `peer_addr` is trusted, this checks `X-Forwarded-For`, then
+    /// `X-Real-IP`, then `Forwarded`. Otherwise forwarding headers are ignored.
     pub fn extract(
         &self,
         peer_addr: SocketAddr,
@@ -42,6 +51,7 @@ impl ClientIpExtractor {
         }
     }
 
+    /// Extracts the real client IP and converts it into an [`IpKey`].
     pub fn extract_key(
         &self,
         peer_addr: SocketAddr,
@@ -50,6 +60,7 @@ impl ClientIpExtractor {
         self.extract(peer_addr, headers).map(IpKey::from)
     }
 
+    /// Returns whether the IP is in the configured trusted proxy networks.
     pub fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
         match ip {
             IpAddr::V4(v4) => self.trusted_v4.iter().any(|net| net.contains(&v4)),
@@ -58,8 +69,9 @@ impl ClientIpExtractor {
     }
 }
 
-// HACK: share this better
-pub fn split_nets(nets: impl IntoIterator<Item = IpNet>) -> (Box<[Ipv4Net]>, Box<[Ipv6Net]>) {
+pub(crate) fn split_nets(
+    nets: impl IntoIterator<Item = IpNet>,
+) -> (Box<[Ipv4Net]>, Box<[Ipv6Net]>) {
     let (mut v4, mut v6) = (Vec::new(), Vec::new());
     for net in nets {
         match net {

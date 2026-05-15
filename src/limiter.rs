@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 type StateStore<K> = governor::state::keyed::DashMapStateStore<K, ahash::RandomState>;
 
 /// A keyed rate limiter for one policy and one unit type.
+///
+/// Each `RateLimiter` represents one bucket. The key type `K` identifies the
+/// client or entity being limited, and the unit marker `U` describes what one
+/// consumed unit means.
 pub struct RateLimiter<K, U = Requests, C: Clock = DefaultClock>
 where
     K: Eq + Hash + Clone,
@@ -21,6 +25,7 @@ impl<K, U> RateLimiter<K, U>
 where
     K: Eq + Hash + Clone,
 {
+    /// Creates a limiter using the default clock.
     pub fn new(policy: Policy) -> Self {
         Self::with_clock(policy, DefaultClock::default())
     }
@@ -31,16 +36,22 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
+    /// Creates a limiter using a caller-provided clock.
+    ///
+    /// This is mainly useful for deterministic tests.
     pub fn with_clock(policy: Policy, clock: C) -> Self {
         Self {
             inner: governor::RateLimiter::new(policy.to_governor_quota(), <_>::default(), clock),
             _unit: PhantomData,
         }
     }
+
+    /// Checks and consumes one unit for `key`.
     pub fn check_and_consume_one(&self, key: &K) -> Result<(), RateLimitError> {
         self.check_and_consume_n(key, NonZeroU32::new(1).unwrap())
     }
 
+    /// Checks and consumes `units` for `key` atomically.
     pub fn check_and_consume_n(&self, key: &K, units: NonZeroU32) -> Result<(), RateLimitError> {
         match self.inner.check_key_n(key, units) {
             Ok(Ok(())) => Ok(()),
@@ -52,6 +63,7 @@ where
         }
     }
 
+    /// Removes stale keyed state from the underlying limiter.
     pub fn retain_recent(&self) {
         self.inner.retain_recent();
     }
@@ -62,6 +74,7 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
+    /// Checks and consumes one request unit for `key`.
     pub fn check_request(&self, key: &K) -> Result<(), RateLimitError> {
         self.check_and_consume_one(key)
     }
@@ -72,6 +85,10 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
+    /// Consumes elapsed time as millisecond units for `key`.
+    ///
+    /// Zero duration is a no-op. Nonzero durations below one millisecond are
+    /// rounded up to one unit.
     pub fn consume_duration(&self, key: &K, duration: Duration) -> Result<(), RateLimitError> {
         if duration.is_zero() {
             return Ok(());
@@ -90,6 +107,10 @@ where
     }
 }
 
+/// Timer guard for explicit elapsed-time charging.
+///
+/// The timer does not charge on drop. Call [`DurationTimer::consume_elapsed`]
+/// to consume the measured duration.
 pub struct DurationTimer<'a, K, C>
 where
     K: Eq + Hash + Clone,
@@ -105,6 +126,7 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
+    /// Starts a timer for later duration-budget charging.
     pub fn start_timer<'a>(&'a self, key: &'a K) -> DurationTimer<'a, K, C> {
         DurationTimer {
             limiter: self,
@@ -119,6 +141,7 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
+    /// Consumes the elapsed time since this timer was created.
     pub fn consume_elapsed(self) -> Result<(), RateLimitError> {
         self.limiter
             .consume_duration(self.key, self.start.elapsed())
