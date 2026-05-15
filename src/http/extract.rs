@@ -58,7 +58,8 @@ impl ClientIpExtractor {
     }
 }
 
-fn split_nets(nets: impl IntoIterator<Item = IpNet>) -> (Box<[Ipv4Net]>, Box<[Ipv6Net]>) {
+// HACK: share this better
+pub fn split_nets(nets: impl IntoIterator<Item = IpNet>) -> (Box<[Ipv4Net]>, Box<[Ipv6Net]>) {
     let (mut v4, mut v6) = (Vec::new(), Vec::new());
     for net in nets {
         match net {

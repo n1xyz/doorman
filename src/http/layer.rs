@@ -1,23 +1,29 @@
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use http::{Request, Response, StatusCode};
+use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use tower::{Layer, Service};
 
+use crate::http::extract::split_nets;
 use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
 
 pub struct RateLimitLayer {
     limiter: Arc<RequestRateLimiter<IpKey>>,
     extractor: ClientIpExtractor,
+    whitelist_v4: Box<[Ipv4Net]>,
+    whitelist_v6: Box<[Ipv6Net]>,
 }
 
 pub struct RateLimitService<S> {
     inner: S,
     limiter: Arc<RequestRateLimiter<IpKey>>,
     extractor: ClientIpExtractor,
+    whitelist_v4: Box<[Ipv4Net]>,
+    whitelist_v6: Box<[Ipv6Net]>,
 }
 
 impl<S> Layer<S> for RateLimitLayer {
@@ -28,13 +34,36 @@ impl<S> Layer<S> for RateLimitLayer {
             inner,
             limiter: Arc::clone(&self.limiter),
             extractor: self.extractor.clone(),
+            whitelist_v4: self.whitelist_v4.clone(),
+            whitelist_v6: self.whitelist_v6.clone(),
         }
     }
 }
 
 impl RateLimitLayer {
     pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
-        Self { limiter, extractor }
+        Self {
+            limiter,
+            extractor,
+            whitelist_v4: Box::new([]),
+            whitelist_v6: Box::new([]),
+        }
+    }
+
+    pub fn with_whitelist(mut self, whitelist: impl IntoIterator<Item = IpNet>) -> Self {
+        let (whitelist_v4, whitelist_v6) = split_nets(whitelist);
+        self.whitelist_v4 = whitelist_v4;
+        self.whitelist_v6 = whitelist_v6;
+        self
+    }
+}
+
+impl<S> RateLimitService<S> {
+    fn is_whitelisted(&self, ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => self.whitelist_v4.iter().any(|net| net.contains(&v4)),
+            IpAddr::V6(v6) => self.whitelist_v6.iter().any(|net| net.contains(&v6)),
+        }
     }
 }
 
@@ -56,10 +85,16 @@ where
             return RateLimitFuture::MissingPeer;
         };
 
-        let key = match self.extractor.extract_key(peer_addr, req.headers()) {
-            Ok(key) => key,
+        let ip = match self.extractor.extract(peer_addr, req.headers()) {
+            Ok(ip) => ip,
             Err(_) => return RateLimitFuture::ExtractFailed,
         };
+        let key = IpKey::from(ip);
+
+        if self.is_whitelisted(ip) {
+            req.extensions_mut().insert(key);
+            return RateLimitFuture::Allowed(self.inner.call(req));
+        }
 
         match self.limiter.check_request(&key) {
             Ok(()) => {

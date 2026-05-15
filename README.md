@@ -154,6 +154,25 @@ let extractor = ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]
 let layer = RateLimitLayer::new(limiter, extractor);
 ```
 
+Whitelist bypasses are scoped to the specific layer. Use this for traffic classes
+where bypassing is intentional, such as a high-throughput action endpoint.
+
+```rust
+# use doorman::http::{ClientIpExtractor, RateLimitLayer};
+# use doorman::{IpKey, Policy, RequestRateLimiter};
+# use ipnet::IpNet;
+# use std::num::NonZeroU32;
+# use std::sync::Arc;
+# let policy = Policy::per_second(
+#     NonZeroU32::new(200).unwrap(),
+#     NonZeroU32::new(400).unwrap(),
+# );
+# let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
+# let extractor = ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+let layer = RateLimitLayer::new(limiter, extractor)
+    .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
+```
+
 The layer expects a `std::net::SocketAddr` to be present in request extensions.
 If the key is over quota, it returns `429 Too Many Requests`. If available,
 `Retry-After` is included.
@@ -184,7 +203,7 @@ Doorman currently does not provide:
 
 ```text
 route classification
-tiering / scoped whitelist
+tiering
 load shedding
 trust tables
 post-handler middleware accounting
