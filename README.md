@@ -158,6 +158,13 @@ The layer expects a `std::net::SocketAddr` to be present in request extensions.
 If the key is over quota, it returns `429 Too Many Requests`. If available,
 `Retry-After` is included.
 
+When the `axum` feature is enabled, the layer can also read peer addresses from
+`axum::extract::ConnectInfo<std::net::SocketAddr>`.
+
+```bash
+cargo test --features axum
+```
+
 ## Errors
 
 `RateLimitError` has two cases:
