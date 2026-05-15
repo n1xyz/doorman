@@ -52,7 +52,7 @@ where
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
-        let Some(peer_addr) = req.extensions().get::<SocketAddr>().copied() else {
+        let Some(peer_addr) = peer_addr(&req) else {
             return RateLimitFuture::MissingPeer;
         };
 
@@ -66,6 +66,24 @@ where
             Err(err) => RateLimitFuture::Limited(err),
         }
     }
+}
+
+fn peer_addr<B>(req: &Request<B>) -> Option<SocketAddr> {
+    if let Some(addr) = req.extensions().get::<SocketAddr>().copied() {
+        return Some(addr);
+    }
+
+    #[cfg(feature = "axum")]
+    {
+        if let Some(axum::extract::ConnectInfo(addr)) = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        {
+            return Some(*addr);
+        }
+    }
+
+    None
 }
 
 pub enum RateLimitFuture<F, B> {
@@ -251,5 +269,18 @@ mod tests {
 
         let second = service.ready().await.unwrap().call(second).await.unwrap();
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[cfg(feature = "axum")]
+    #[tokio::test]
+    async fn peer_addr_reads_axum_connect_info() {
+        let mut service = layer().layer(ok_service());
+        let mut req = Request::new(());
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(socket("1.2.3.4")));
+
+        let response = service.ready().await.unwrap().call(req).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

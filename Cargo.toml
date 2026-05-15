@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 ahash = "0.8"
+axum = { version = "0.8.9", optional = true }
 forwarded-header-value = "0.1.1"
 governor = { version = "0.10.4", features = ["dashmap"] }
 http = "1"
@@ -13,3 +14,7 @@ tower = { version = "0.5.3", features = ["util"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[features]
+default = []
+axum = ["dep:axum"]
