@@ -187,7 +187,6 @@ route classification
 tiering / scoped whitelist
 load shedding
 trust tables
-Axum-specific ConnectInfo integration
 post-handler middleware accounting
 ```
 

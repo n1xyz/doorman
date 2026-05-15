@@ -51,7 +51,7 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, mut req: Request<B>) -> Self::Future {
         let Some(peer_addr) = peer_addr(&req) else {
             return RateLimitFuture::MissingPeer;
         };
@@ -62,7 +62,11 @@ where
         };
 
         match self.limiter.check_request(&key) {
-            Ok(()) => RateLimitFuture::Allowed(self.inner.call(req)),
+            Ok(()) => {
+                req.extensions_mut().insert(key); // passes IpKey downstream if needed to
+                // charge user
+                RateLimitFuture::Allowed(self.inner.call(req))
+            }
             Err(err) => RateLimitFuture::Limited(err),
         }
     }
@@ -174,9 +178,38 @@ mod tests {
         })
     }
 
+    fn require_ip_key_service(
+        expected: IpKey,
+    ) -> impl Service<Request<()>, Response = Response<()>, Error = Infallible> {
+        service_fn(move |req: Request<()>| async move {
+            let status = match req.extensions().get::<IpKey>() {
+                Some(key) if *key == expected => StatusCode::OK,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+
+            Ok::<_, Infallible>(Response::builder().status(status).body(()).unwrap())
+        })
+    }
+
     #[tokio::test]
     async fn allowed_request_calls_inner_service() {
         let mut service = layer().layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn allowed_request_inserts_ip_key_extension() {
+        let expected = IpKey::from("1.2.3.4".parse::<std::net::IpAddr>().unwrap());
+        let mut service = layer().layer(require_ip_key_service(expected));
 
         let response = service
             .ready()
