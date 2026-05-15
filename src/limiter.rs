@@ -312,6 +312,34 @@ mod tests {
     }
 
     #[test]
+    fn duration_over_budget_returns_limited() {
+        let (limiter, _) = make_duration_limiter(3);
+
+        assert!(
+            limiter
+                .consume_duration(&1, Duration::from_millis(3))
+                .is_ok()
+        );
+
+        let err = limiter
+            .consume_duration(&1, Duration::from_millis(1))
+            .unwrap_err();
+
+        assert!(matches!(err, RateLimitError::Limited { .. }));
+    }
+
+    #[test]
+    fn duration_larger_than_burst_returns_insufficient_capacity() {
+        let (limiter, _) = make_duration_limiter(3);
+
+        let err = limiter
+            .consume_duration(&1, Duration::from_millis(4))
+            .unwrap_err();
+
+        assert!(matches!(err, RateLimitError::InsufficientCapacity));
+    }
+
+    #[test]
     fn timer_consume_elapsed_charges_duration_budget() {
         let (limiter, _) = make_duration_limiter(1);
 

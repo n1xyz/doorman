@@ -205,6 +205,10 @@ mod tests {
         RateLimitLayer::new(limiter, extractor)
     }
 
+    fn whitelisted_layer() -> RateLimitLayer {
+        layer().with_whitelist(["1.2.3.0/24".parse::<IpNet>().unwrap()])
+    }
+
     fn request(peer: Option<&str>) -> Request<()> {
         let mut req = Request::new(());
         if let Some(peer) = peer {
@@ -289,7 +293,56 @@ mod tests {
             .unwrap();
 
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert!(second.headers().contains_key(RETRY_AFTER));
+        assert_eq!(
+            second
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn whitelist_bypasses_only_the_configured_layer() {
+        let mut action_service = whitelisted_layer().layer(ok_service());
+
+        let first = action_service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = action_service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+
+        let mut general_service = layer().layer(ok_service());
+
+        let first = general_service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = general_service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
@@ -326,6 +379,35 @@ mod tests {
 
         let second = service.ready().await.unwrap().call(second).await.unwrap();
         assert_eq!(second.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn trusted_proxy_forwarded_clients_have_independent_quota() {
+        let mut service = layer().layer(ok_service());
+
+        let mut first = request(Some("127.0.0.1"));
+        first
+            .headers_mut()
+            .insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
+
+        let first = service.ready().await.unwrap().call(first).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let mut second = request(Some("127.0.0.1"));
+        second
+            .headers_mut()
+            .insert("x-forwarded-for", "2.2.2.2".parse().unwrap());
+
+        let second = service.ready().await.unwrap().call(second).await.unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+
+        let mut third = request(Some("127.0.0.1"));
+        third
+            .headers_mut()
+            .insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
+
+        let third = service.ready().await.unwrap().call(third).await.unwrap();
+        assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
