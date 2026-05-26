@@ -19,7 +19,7 @@
 //! all other routes:
 //!
 //! ```rust
-//! use doorman::http::{ClientIpExtractor, RateLimitLayer};
+//! use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
 //! use doorman::{IpKey, Policy, RequestRateLimiter};
 //! use ipnet::IpNet;
 //! use std::num::NonZeroU32;
@@ -42,9 +42,12 @@
 //! let general_extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
-//! let action_layer = RateLimitLayer::new(action_limiter, action_extractor)
+//! let action_strategy = RequestCountByIp::new(action_limiter, action_extractor)
 //!     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
-//! let general_layer = RateLimitLayer::new(general_limiter, general_extractor);
+//! let general_strategy = RequestCountByIp::new(general_limiter, general_extractor);
+//!
+//! let action_layer = RateLimitLayer::with_strategy(action_strategy);
+//! let general_layer = RateLimitLayer::with_strategy(general_strategy);
 //!
 //! // Apply `action_layer` only to /action.
 //! // Apply `general_layer` to the rest of the router.

@@ -11,43 +11,23 @@ use tower::{Layer, Service};
 use crate::http::extract::split_nets;
 use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
 
-/// Tower layer for fixed-cost request rate limiting by client IP.
-///
-/// The layer extracts an [`IpKey`], optionally bypasses whitelisted IPs, checks
-/// one request unit, and stores the `IpKey` in request extensions before calling
-/// the inner service.
-pub struct RateLimitLayer {
+enum RateLimitRejection {
+    Limited(RateLimitError),
+    MissingPeer,
+    ExtractFailed,
+}
+
+/// Fixed-cost request limiting by client IP.
+#[derive(Clone)]
+pub struct RequestCountByIp {
     limiter: Arc<RequestRateLimiter<IpKey>>,
     extractor: ClientIpExtractor,
     whitelist_v4: Box<[Ipv4Net]>,
     whitelist_v6: Box<[Ipv6Net]>,
 }
 
-/// Service produced by [`RateLimitLayer`].
-pub struct RateLimitService<S> {
-    inner: S,
-    limiter: Arc<RequestRateLimiter<IpKey>>,
-    extractor: ClientIpExtractor,
-    whitelist_v4: Box<[Ipv4Net]>,
-    whitelist_v6: Box<[Ipv6Net]>,
-}
-
-impl<S> Layer<S> for RateLimitLayer {
-    type Service = RateLimitService<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        RateLimitService {
-            inner,
-            limiter: Arc::clone(&self.limiter),
-            extractor: self.extractor.clone(),
-            whitelist_v4: self.whitelist_v4.clone(),
-            whitelist_v6: self.whitelist_v6.clone(),
-        }
-    }
-}
-
-impl RateLimitLayer {
-    /// Creates a request rate-limit layer.
+impl RequestCountByIp {
+    /// Creates a request-counting strategy keyed by client IP.
     pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
         Self {
             limiter,
@@ -66,14 +46,76 @@ impl RateLimitLayer {
         self.whitelist_v6 = whitelist_v6;
         self
     }
-}
 
-impl<S> RateLimitService<S> {
     fn is_whitelisted(&self, ip: IpAddr) -> bool {
         match ip {
             IpAddr::V4(v4) => self.whitelist_v4.iter().any(|net| net.contains(&v4)),
             IpAddr::V6(v6) => self.whitelist_v6.iter().any(|net| net.contains(&v6)),
         }
+    }
+
+    fn before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+        let Some(peer_addr) = peer_addr(&req) else {
+            return Err(RateLimitRejection::MissingPeer);
+        };
+
+        let ip = self
+            .extractor
+            .extract(peer_addr, req.headers())
+            .map_err(|_| RateLimitRejection::ExtractFailed)?;
+
+        let key = IpKey::from(ip);
+
+        if self.is_whitelisted(ip) {
+            req.extensions_mut().insert(key);
+            return Ok(());
+        }
+
+        self.limiter
+            .check_request(&key)
+            .map_err(RateLimitRejection::Limited)?;
+
+        req.extensions_mut().insert(key);
+        Ok(())
+    }
+}
+
+/// Tower layer that applies a rate-limit strategy before calling the inner service.
+pub struct RateLimitLayer {
+    strategy: RequestCountByIp,
+}
+
+pub struct RateLimitService<S> {
+    inner: S,
+    strategy: RequestCountByIp,
+}
+
+impl<S> Layer<S> for RateLimitLayer {
+    type Service = RateLimitService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RateLimitService {
+            inner,
+            strategy: self.strategy.clone(),
+        }
+    }
+}
+
+impl RateLimitLayer {
+    /// Creates a layer from a request-counting strategy.
+    pub fn with_strategy(strategy: RequestCountByIp) -> Self {
+        Self { strategy }
+    }
+
+    /// Creates a layer using fixed-cost request limiting by client IP.
+    pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
+        Self::with_strategy(RequestCountByIp::new(limiter, extractor))
+    }
+
+    /// Adds IP networks that bypass this layer's request-count strategy.
+    pub fn with_whitelist(mut self, whitelist: impl IntoIterator<Item = IpNet>) -> Self {
+        self.strategy = self.strategy.with_whitelist(whitelist);
+        self
     }
 }
 
@@ -91,28 +133,11 @@ where
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
-        let Some(peer_addr) = peer_addr(&req) else {
-            return RateLimitFuture::MissingPeer;
-        };
-
-        let ip = match self.extractor.extract(peer_addr, req.headers()) {
-            Ok(ip) => ip,
-            Err(_) => return RateLimitFuture::ExtractFailed,
-        };
-        let key = IpKey::from(ip);
-
-        if self.is_whitelisted(ip) {
-            req.extensions_mut().insert(key);
-            return RateLimitFuture::Allowed(self.inner.call(req));
-        }
-
-        match self.limiter.check_request(&key) {
-            Ok(()) => {
-                req.extensions_mut().insert(key); // passes IpKey downstream if needed to
-                // charge user
-                RateLimitFuture::Allowed(self.inner.call(req))
-            }
-            Err(err) => RateLimitFuture::Limited(err),
+        match self.strategy.before_request(&mut req) {
+            Ok(()) => RateLimitFuture::Allowed(self.inner.call(req)),
+            Err(RateLimitRejection::Limited(err)) => RateLimitFuture::Limited(err),
+            Err(RateLimitRejection::MissingPeer) => RateLimitFuture::MissingPeer,
+            Err(RateLimitRejection::ExtractFailed) => RateLimitFuture::ExtractFailed,
         }
     }
 }

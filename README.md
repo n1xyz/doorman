@@ -139,10 +139,10 @@ used directly.
 
 ## HTTP Layer
 
-`RateLimitLayer` is a Tower layer for fixed-cost HTTP request limiting.
+`RateLimitLayer` is a Tower layer that applies a request-counting strategy.
 
 ```rust
-use doorman::http::{ClientIpExtractor, RateLimitLayer};
+use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
 use doorman::{IpKey, Policy, RequestRateLimiter};
 use ipnet::IpNet;
 use std::num::NonZeroU32;
@@ -155,14 +155,15 @@ let policy = Policy::per_second(
 let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let layer = RateLimitLayer::new(limiter, extractor);
+let strategy = RequestCountByIp::new(limiter, extractor);
+let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
 Whitelist bypasses are scoped to the specific layer. Use this for traffic classes
 where bypassing is intentional, such as a high-throughput action endpoint.
 
 ```rust
-# use doorman::http::{ClientIpExtractor, RateLimitLayer};
+# use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
 # use doorman::{IpKey, Policy, RequestRateLimiter};
 # use ipnet::IpNet;
 # use std::num::NonZeroU32;
@@ -173,8 +174,9 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 # );
 # let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 # let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-let layer = RateLimitLayer::new(limiter, extractor)
+let strategy = RequestCountByIp::new(limiter, extractor)
     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
+let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
 The layer expects a `std::net::SocketAddr` to be present in request extensions.
