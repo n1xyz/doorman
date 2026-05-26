@@ -111,11 +111,15 @@ too large for u32   -> InsufficientCapacity
 `IpKey` is a convenience key type for IP-based limiters.
 
 ```text
-IPv4 -> exact u32 address bits
-IPv6 -> /56 prefix represented as u64
+IPv4 -> exact u32 address bits embedded in an internal sentinel range
+IPv6 -> /64 prefix represented as u64
 ```
 
 The IPv6 grouping intentionally limits by prefix rather than individual address.
+The IPv4 sentinel uses `2001:db8::/32`, which is reserved for documentation and
+should not appear as real client traffic. This keeps `IpKey` compact at one
+`u64`, but it is not collision-free for arbitrary synthetic IPv6 addresses in
+that documentation range.
 
 ## HTTP Client IP Extraction
 

@@ -1,44 +1,51 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// Key type for IP-based rate limiting.
+const IPV4_SENTINEL_PREFIX: u64 = 0x2001_0db8_0000_0000;
+
+/// Compact key type for IP-based rate limiting.
 ///
-/// IPv4 addresses are keyed exactly. IPv6 addresses are grouped by /56 prefix
-/// to avoid treating every IPv6 address as an independent client.
+/// IPv4 addresses are keyed exactly by embedding their 32 bits into an internal
+/// sentinel range. IPv6 addresses are grouped by /64 prefix.
+///
+/// This representation is compact, but it is not collision free for every
+/// syntactically valid IPv6 address. The IPv4 sentinel uses 2001:db8::/32,
+/// which is reserved for documentation and should not appear as real client traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum IpKey {
-    /// Exact IPv4 address bits.
-    V4(u32),
+pub struct IpKey(u64);
 
-    /// IPv6 /56 prefix represented as a `u64`.
-    V6(u64),
+impl IpKey {
+    pub fn into_inner(self) -> u64 {
+        self.0
+    }
 }
 
 impl From<IpAddr> for IpKey {
     fn from(ip: IpAddr) -> Self {
         match ip {
-            IpAddr::V4(v4) => Self::V4(ipv4_to_u32(v4)),
-            IpAddr::V6(v6) => Self::V6(ipv6_to_u64(v6)),
+            IpAddr::V4(v4) => Self(ipv4_to_u64(v4)),
+            IpAddr::V6(v6) => Self(ipv6_to_u64(v6)),
         }
     }
 }
 
-fn ipv4_to_u32(ip: std::net::Ipv4Addr) -> u32 {
-    ip.to_bits()
+fn ipv4_to_u64(ip: Ipv4Addr) -> u64 {
+    IPV4_SENTINEL_PREFIX | u64::from(ip.to_bits())
 }
 
-/// TODO: look to improve this?
+/// Use the first 64 bits of the IPV6 address as the key:
 ///
-/// Rate limiting IPv6 addresses is in an incredibly poor state.
+/// This means that these share a key:
 ///
-/// We naively rate limit by /56 prefixes in that case. This may lead
-/// to false positives, but the additional 256 requests is probably not
-/// an issue for most users, given our generous rate limits. Thanks to
-/// the /56, we can map the IPs to a single `u64` to use as the key.
+///   2600:db8:1234:5600::1
+///   2600:db8:1234:5600::ffff
 ///
-/// http://essay.utwente.nl/96014/1/van%20Heijningen_BA_EEMCS.pdf
-fn ipv6_to_u64(ip: std::net::Ipv6Addr) -> u64 {
-    let ip = (ip.to_bits() >> 64) as u64;
-    ip & 0xffff_ffff_ffff_ff00
+/// But these do not:
+///
+///   2600:db8:1234:5600::1
+///   2600:db8:1234:5601::1
+///
+fn ipv6_to_u64(ip: Ipv6Addr) -> u64 {
+    (ip.to_bits() >> 64) as u64
 }
 
 #[cfg(test)]
@@ -50,22 +57,30 @@ mod tests {
     fn ipv4_key_uses_exact_address_bits() {
         let ip = Ipv4Addr::new(1, 2, 3, 4);
 
-        assert_eq!(IpKey::from(IpAddr::V4(ip)), IpKey::V4(ip.to_bits()));
+        assert_eq!(
+            IpKey::from(IpAddr::V4(ip)).into_inner(),
+            0x2001_0db8_0000_0000 | u64::from(ip.to_bits())
+        );
     }
 
     #[test]
-    fn ipv6_addresses_in_same_56_share_key() {
-        let ip1: IpAddr = "2001:db8:1234:5600::1".parse().unwrap();
-        let ip2: IpAddr = "2001:db8:1234:5600::ffff".parse().unwrap();
+    fn ipv6_addresses_in_same_64_share_key() {
+        let ip1: IpAddr = "2600:1f18:1234:5600::1".parse().unwrap();
+        let ip2: IpAddr = "2600:1f18:1234:5600::ffff".parse().unwrap();
 
         assert_eq!(IpKey::from(ip1), IpKey::from(ip2));
     }
 
     #[test]
-    fn ipv6_addresses_in_different_56_have_different_keys() {
-        let ip1: IpAddr = "2001:db8:1234:5600::1".parse().unwrap();
-        let ip2: IpAddr = "2001:db8:1234:5700::1".parse().unwrap();
+    fn ipv6_addresses_in_different_64_have_different_keys() {
+        let ip1: IpAddr = "2600:1f18:1234:5600::1".parse().unwrap();
+        let ip2: IpAddr = "2600:1f18:1234:5601::1".parse().unwrap();
 
         assert_ne!(IpKey::from(ip1), IpKey::from(ip2));
+    }
+
+    #[test]
+    fn ip_key_is_one_u64() {
+        assert_eq!(std::mem::size_of::<IpKey>(), std::mem::size_of::<u64>());
     }
 }
