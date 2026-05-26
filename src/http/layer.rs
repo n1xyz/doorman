@@ -11,7 +11,8 @@ use tower::{Layer, Service};
 use crate::http::extract::split_nets;
 use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
 
-enum RateLimitRejection {
+/// Reason a rate-limit strategy rejected a request before the inner service ran.
+pub enum RateLimitRejection {
     Limited(RateLimitError),
     MissingPeer,
     ExtractFailed,
@@ -54,7 +55,7 @@ impl RequestCountByIp {
         }
     }
 
-    fn before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
         let Some(peer_addr) = peer_addr(&req) else {
             return Err(RateLimitRejection::MissingPeer);
         };
@@ -81,17 +82,31 @@ impl RequestCountByIp {
 }
 
 /// Tower layer that applies a rate-limit strategy before calling the inner service.
-pub struct RateLimitLayer {
-    strategy: RequestCountByIp,
+pub struct RateLimitLayer<T> {
+    strategy: T,
 }
 
-pub struct RateLimitService<S> {
+/// Strategy hook run by [`RateLimitLayer`] before the inner service is called.
+pub trait RateLimitStrategy<B>: Clone {
+    fn before_request(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection>;
+}
+
+impl<B> RateLimitStrategy<B> for RequestCountByIp {
+    fn before_request(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+        self.check_before_request(req)
+    }
+}
+
+pub struct RateLimitService<S, T> {
     inner: S,
-    strategy: RequestCountByIp,
+    strategy: T,
 }
 
-impl<S> Layer<S> for RateLimitLayer {
-    type Service = RateLimitService<S>;
+impl<S, T> Layer<S> for RateLimitLayer<T>
+where
+    T: Clone,
+{
+    type Service = RateLimitService<S, T>;
 
     fn layer(&self, inner: S) -> Self::Service {
         RateLimitService {
@@ -101,12 +116,14 @@ impl<S> Layer<S> for RateLimitLayer {
     }
 }
 
-impl RateLimitLayer {
+impl<T> RateLimitLayer<T> {
     /// Creates a layer from a request-counting strategy.
-    pub fn with_strategy(strategy: RequestCountByIp) -> Self {
+    pub fn with_strategy(strategy: T) -> Self {
         Self { strategy }
     }
+}
 
+impl RateLimitLayer<RequestCountByIp> {
     /// Creates a layer using fixed-cost request limiting by client IP.
     pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
         Self::with_strategy(RequestCountByIp::new(limiter, extractor))
@@ -119,9 +136,10 @@ impl RateLimitLayer {
     }
 }
 
-impl<S, B> Service<Request<B>> for RateLimitService<S>
+impl<S, B, T> Service<Request<B>> for RateLimitService<S, T>
 where
     S: Service<Request<B>, Response = Response<B>>,
+    T: RateLimitStrategy<B>,
     B: Default,
 {
     type Response = S::Response;
@@ -223,7 +241,7 @@ mod tests {
     use tower::ServiceExt;
     use tower::service_fn;
 
-    fn layer() -> RateLimitLayer {
+    fn layer() -> RateLimitLayer<RequestCountByIp> {
         let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
         let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
@@ -231,7 +249,7 @@ mod tests {
         RateLimitLayer::new(limiter, extractor)
     }
 
-    fn whitelisted_layer() -> RateLimitLayer {
+    fn whitelisted_layer() -> RateLimitLayer<RequestCountByIp> {
         layer().with_whitelist(["1.2.3.0/24".parse::<IpNet>().unwrap()])
     }
 
