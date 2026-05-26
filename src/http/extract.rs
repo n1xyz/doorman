@@ -22,7 +22,7 @@ pub enum ExtractClientIpError {
 
 impl ClientIpExtractor {
     /// Creates an extractor with the trusted proxy networks.
-    pub fn new(trusted_proxies: impl IntoIterator<Item = IpNet>) -> Self {
+    pub fn with_trusted_proxies(trusted_proxies: impl IntoIterator<Item = IpNet>) -> Self {
         let (trusted_v4, trusted_v6) = split_nets(trusted_proxies);
         Self {
             trusted_v4,
@@ -126,7 +126,9 @@ mod tests {
     use http::header::FORWARDED;
 
     fn extractor(trusted: &[&str]) -> ClientIpExtractor {
-        ClientIpExtractor::new(trusted.iter().map(|net| net.parse::<IpNet>().unwrap()))
+        ClientIpExtractor::with_trusted_proxies(
+            trusted.iter().map(|net| net.parse::<IpNet>().unwrap()),
+        )
     }
 
     fn socket(ip: &str) -> SocketAddr {

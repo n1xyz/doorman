@@ -153,7 +153,7 @@ let policy = Policy::per_second(
     NonZeroU32::new(400).unwrap(),
 );
 let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
-let extractor = ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
 let layer = RateLimitLayer::new(limiter, extractor);
 ```
@@ -172,7 +172,7 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 #     NonZeroU32::new(400).unwrap(),
 # );
 # let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
-# let extractor = ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+# let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 let layer = RateLimitLayer::new(limiter, extractor)
     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
 ```

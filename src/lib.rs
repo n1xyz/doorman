@@ -38,9 +38,9 @@
 //! let general_limiter = Arc::new(RequestRateLimiter::<IpKey>::new(general_policy));
 //!
 //! let action_extractor =
-//!     ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+//!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //! let general_extractor =
-//!     ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+//!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
 //! let action_layer = RateLimitLayer::new(action_limiter, action_extractor)
 //!     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);

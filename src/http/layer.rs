@@ -201,7 +201,8 @@ mod tests {
     fn layer() -> RateLimitLayer {
         let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
         let limiter = Arc::new(RequestRateLimiter::new(policy));
-        let extractor = ClientIpExtractor::new(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
         RateLimitLayer::new(limiter, extractor)
     }
 
