@@ -267,7 +267,35 @@ where
                 let poll = unsafe { Pin::new_unchecked(future) }.poll(cx);
 
                 match poll {
-                    Poll::Pending => Poll::Pending,
+                    Poll::Pending => {
+                        if let Some(timeout) = timeout.as_mut() {
+                            match timeout.as_mut().poll(cx) {
+                                Poll::Pending => Poll::Pending,
+                                Poll::Ready(()) => {
+                                    let elapsed = start.elapsed();
+                                    let state = state
+                                        .take()
+                                        .expect("state is present until response completes");
+                                    let after = strategy.after_response(state, elapsed);
+
+                                    match after {
+                                        Ok(()) => Poll::Ready(Ok(rate_limited_response(
+                                            RateLimitError::limited(Duration::ZERO), // 429
+                                        ))),
+                                        Err(RateLimitRejection::Limited(err)) => {
+                                            Poll::Ready(Ok(rate_limited_response(err)))
+                                        }
+                                        Err(
+                                            RateLimitRejection::MissingPeer
+                                            | RateLimitRejection::ExtractFailed,
+                                        ) => Poll::Ready(Ok(server_error_response())),
+                                    }
+                                }
+                            }
+                        } else {
+                            Poll::Pending
+                        }
+                    }
                     Poll::Ready(result) => {
                         let elapsed = start.elapsed();
                         let state = state
@@ -400,6 +428,32 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct TimeoutImmediately {
+        called: Rc<Cell<bool>>,
+    }
+
+    impl<B> RateLimitStrategy<B> for TimeoutImmediately {
+        type State = ();
+
+        fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Ok(())
+        }
+
+        fn after_response(
+            &self,
+            _state: Self::State,
+            _elapsed: Duration,
+        ) -> Result<(), RateLimitRejection> {
+            self.called.set(true);
+            Ok(())
+        }
+
+        fn timeout(&self, _state: &Self::State) -> Option<Duration> {
+            Some(Duration::ZERO)
+        }
+    }
+
     fn layer() -> RateLimitLayer<RequestCountByIp> {
         let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
         let limiter = Arc::new(RequestRateLimiter::new(policy));
@@ -428,6 +482,10 @@ mod tests {
         service_fn(|_req: Request<()>| async {
             Ok::<_, Infallible>(Response::builder().status(StatusCode::OK).body(()).unwrap())
         })
+    }
+
+    fn pending_service() -> impl Service<Request<()>, Response = Response<()>, Error = Infallible> {
+        service_fn(|_req: Request<()>| std::future::pending::<Result<Response<()>, Infallible>>())
     }
 
     fn require_ip_key_service(
@@ -534,6 +592,33 @@ mod tests {
                 .get(RETRY_AFTER)
                 .and_then(|value| value.to_str().ok()),
             Some("3")
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_timeout_returns_429_and_runs_after_response() {
+        let called = Rc::new(Cell::new(false));
+        let strategy = TimeoutImmediately {
+            called: Rc::clone(&called),
+        };
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(called.get());
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
         );
     }
 
