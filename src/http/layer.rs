@@ -11,7 +11,9 @@ use tokio::time::{Sleep, sleep};
 use tower::{Layer, Service};
 
 use crate::http::extract::split_nets;
-use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
+use crate::{
+    DurationBudgetLimiter, IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor,
+};
 
 /// Reason a rate-limit strategy rejected a request before the inner service ran.
 pub enum RateLimitRejection {
@@ -23,6 +25,41 @@ pub enum RateLimitRejection {
 
     /// The strategy could not extract a usable client identity from the request.
     ExtractFailed,
+}
+
+/// Elapsed-time budget accounting by client IP.
+///
+/// This built-in [`RateLimitStrategy`] extracts the real client IP before the
+/// inner service runs, then charges the elapsed inner-service future duration
+/// after it completes. The measured duration does not include full response body
+/// streaming after the response future resolves.
+#[derive(Clone)]
+pub struct DurationBudgetByIp {
+    limiter: Arc<DurationBudgetLimiter<IpKey>>,
+    extractor: ClientIpExtractor,
+    timeout: Option<Duration>,
+}
+
+impl DurationBudgetByIp {
+    /// Creates an elapsed-time budget strategy keyed by client IP.
+    pub fn new(
+        limiter: Arc<DurationBudgetLimiter<IpKey>>,
+        extractor: ClientIpExtractor,
+        timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            limiter,
+            extractor,
+            timeout,
+        }
+    }
+
+    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
+        let (_, key) = extract_ip_key(&self.extractor, req)?;
+
+        req.extensions_mut().insert(key);
+        Ok(key)
+    }
 }
 
 /// Fixed-cost request limiting by client IP.
@@ -67,16 +104,7 @@ impl RequestCountByIp {
     }
 
     fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
-        let Some(peer_addr) = peer_addr(&req) else {
-            return Err(RateLimitRejection::MissingPeer);
-        };
-
-        let ip = self
-            .extractor
-            .extract(peer_addr, req.headers())
-            .map_err(|_| RateLimitRejection::ExtractFailed)?;
-
-        let key = IpKey::from(ip);
+        let (ip, key) = extract_ip_key(&self.extractor, req)?;
 
         if self.is_whitelisted(ip) {
             req.extensions_mut().insert(key);
@@ -133,6 +161,25 @@ impl<B> RateLimitStrategy<B> for RequestCountByIp {
     type State = ();
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
         self.check_before_request(req)
+    }
+}
+
+impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
+    type State = IpKey;
+    fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
+        self.check_before_request(req)
+    }
+    fn after_response(
+        &self,
+        state: Self::State,
+        elapsed: Duration,
+    ) -> Result<(), RateLimitRejection> {
+        self.limiter
+            .consume_duration(&state, elapsed)
+            .map_err(RateLimitRejection::Limited)
+    }
+    fn timeout(&self, _state: &Self::State) -> Option<Duration> {
+        self.timeout
     }
 }
 
@@ -227,6 +274,23 @@ fn peer_addr<B>(req: &Request<B>) -> Option<SocketAddr> {
     }
 
     None
+}
+
+fn extract_ip_key<B>(
+    extractor: &ClientIpExtractor,
+    req: &mut Request<B>,
+) -> Result<(IpAddr, IpKey), RateLimitRejection> {
+    let Some(peer_addr) = peer_addr(req) else {
+        return Err(RateLimitRejection::MissingPeer);
+    };
+
+    let ip = extractor
+        .extract(peer_addr, req.headers())
+        .map_err(|_| RateLimitRejection::ExtractFailed)?;
+
+    let key = IpKey::from(ip);
+
+    Ok((ip, key))
 }
 
 pub enum RateLimitFuture<F, B, T>
@@ -484,6 +548,15 @@ mod tests {
         })
     }
 
+    fn sleep_service(
+        duration: Duration,
+    ) -> impl Service<Request<()>, Response = Response<()>, Error = Infallible> {
+        service_fn(move |_req: Request<()>| async move {
+            tokio::time::sleep(duration).await;
+            Ok::<_, Infallible>(Response::builder().status(StatusCode::OK).body(()).unwrap())
+        })
+    }
+
     fn pending_service() -> impl Service<Request<()>, Response = Response<()>, Error = Infallible> {
         service_fn(|_req: Request<()>| std::future::pending::<Result<Response<()>, Infallible>>())
     }
@@ -613,6 +686,54 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(called.get());
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn duration_budget_by_ip_charges_elapsed_time_after_response() {
+        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = DurationBudgetByIp::new(limiter, extractor, None);
+        let mut service =
+            RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn duration_budget_by_ip_timeout_returns_429() {
+        let policy = Policy::per_second(NonZeroU32::new(10).unwrap(), NonZeroU32::new(10).unwrap());
+        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::ZERO));
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             response
                 .headers()

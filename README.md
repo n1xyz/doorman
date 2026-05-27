@@ -139,12 +139,14 @@ used directly.
 
 ## HTTP Layer
 
-`RateLimitLayer` is a Tower layer that applies a pre-request rate-limit
-strategy. `RequestCountByIp` is the built-in strategy for fixed-cost request
-limits keyed by client IP: it extracts the client IP, applies whitelist bypasses,
-consumes one request unit, and stores the resulting `IpKey` in request
-extensions. Applications that need a different key or policy can provide their
-own type that implements `RateLimitStrategy`.
+`RateLimitLayer` is a Tower layer that applies a rate-limit strategy.
+`RequestCountByIp` is the built-in strategy for fixed-cost request limits keyed
+by client IP: it extracts the client IP, applies whitelist bypasses, consumes
+one request unit, and stores the resulting `IpKey` in request extensions.
+`DurationBudgetByIp` is the built-in strategy for elapsed inner-service time
+accounting keyed by client IP, with an optional per-request timeout.
+Applications that need a different key or policy can provide their own type that
+implements `RateLimitStrategy`.
 
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
@@ -161,6 +163,29 @@ let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
 let strategy = RequestCountByIp::new(limiter, extractor);
+let layer = RateLimitLayer::with_strategy(strategy);
+```
+
+Elapsed-time budgets use the same layer with a different strategy. The elapsed
+duration is measured until the inner service future resolves; response body
+streaming after that point is not included.
+
+```rust
+use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
+use doorman::{DurationBudgetLimiter, IpKey, Policy};
+use ipnet::IpNet;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::time::Duration;
+
+let policy = Policy::per_second(
+    NonZeroU32::new(2_000).unwrap(),
+    NonZeroU32::new(2_000).unwrap(),
+);
+let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+
+let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::from_secs(2)));
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
