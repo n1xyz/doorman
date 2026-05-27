@@ -1,5 +1,5 @@
 use crate::IpKey;
-use http::HeaderMap;
+use http::{HeaderMap, Request};
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use std::net::{IpAddr, SocketAddr};
 
@@ -80,6 +80,24 @@ pub(crate) fn split_nets(
         }
     }
     (v4.into(), v6.into())
+}
+
+pub(crate) fn peer_addr<B>(req: &Request<B>) -> Option<SocketAddr> {
+    if let Some(addr) = req.extensions().get::<SocketAddr>().copied() {
+        return Some(addr);
+    }
+
+    #[cfg(feature = "axum")]
+    {
+        if let Some(axum::extract::ConnectInfo(addr)) = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        {
+            return Some(*addr);
+        }
+    }
+
+    None
 }
 
 fn maybe_x_forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {

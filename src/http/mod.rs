@@ -1,8 +1,7 @@
 pub mod extract;
 pub mod layer;
+pub mod strategy;
 
 pub use extract::{ClientIpExtractor, ExtractClientIpError};
-pub use layer::{
-    DurationBudgetByIp, RateLimitLayer, RateLimitRejection, RateLimitService, RateLimitStrategy,
-    RequestCountByIp,
-};
+pub use layer::{RateLimitLayer, RateLimitRejection, RateLimitService, RateLimitStrategy};
+pub use strategy::{DurationBudgetByIp, RequestCountByIp};
