@@ -13,12 +13,21 @@ use crate::{IpKey, RateLimitError, RequestRateLimiter, http::ClientIpExtractor};
 
 /// Reason a rate-limit strategy rejected a request before the inner service ran.
 pub enum RateLimitRejection {
+    /// The request was rejected by a limiter.
     Limited(RateLimitError),
+
+    /// The request did not contain peer address information.
     MissingPeer,
+
+    /// The strategy could not extract a usable client identity from the request.
     ExtractFailed,
 }
 
 /// Fixed-cost request limiting by client IP.
+///
+/// This is the built-in [`RateLimitStrategy`] for the common HTTP case: extract
+/// the real client IP, optionally bypass whitelisted networks, consume one
+/// request unit, and store the resulting [`IpKey`] in request extensions.
 #[derive(Clone)]
 pub struct RequestCountByIp {
     limiter: Arc<RequestRateLimiter<IpKey>>,
@@ -38,7 +47,7 @@ impl RequestCountByIp {
         }
     }
 
-    /// Adds IP networks that bypass this layer's request limiter.
+    /// Adds IP networks that bypass this strategy's request limiter.
     ///
     /// Whitelisting is scoped to this layer only.
     pub fn with_whitelist(mut self, whitelist: impl IntoIterator<Item = IpNet>) -> Self {
@@ -82,12 +91,24 @@ impl RequestCountByIp {
 }
 
 /// Tower layer that applies a rate-limit strategy before calling the inner service.
+///
+/// The layer owns the Tower mechanics. The strategy owns the policy decision:
+/// what key to extract, what cost to charge, and whether the request should be
+/// rejected before the inner service runs.
 pub struct RateLimitLayer<T> {
     strategy: T,
 }
 
 /// Strategy hook run by [`RateLimitLayer`] before the inner service is called.
+///
+/// Implement this trait for custom pre-request policies, such as API-key
+/// limits, user-account limits, or route-specific request costs.
 pub trait RateLimitStrategy<B>: Clone {
+    /// Checks and optionally mutates a request before the inner service runs.
+    ///
+    /// Returning `Ok(())` allows the request to continue. Returning
+    /// [`RateLimitRejection`] causes [`RateLimitLayer`] to return the matching
+    /// rejection response without calling the inner service.
     fn before_request(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection>;
 }
 
@@ -238,8 +259,29 @@ mod tests {
     use ipnet::IpNet;
     use std::convert::Infallible;
     use std::num::NonZeroU32;
+    use std::time::Duration;
     use tower::ServiceExt;
     use tower::service_fn;
+
+    #[derive(Clone)]
+    struct AlwaysAllow;
+
+    impl<B> RateLimitStrategy<B> for AlwaysAllow {
+        fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct AlwaysLimited;
+
+    impl<B> RateLimitStrategy<B> for AlwaysLimited {
+        fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Err(RateLimitRejection::Limited(RateLimitError::limited(
+                Duration::from_secs(2),
+            )))
+        }
+    }
 
     fn layer() -> RateLimitLayer<RequestCountByIp> {
         let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
@@ -297,6 +339,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_can_allow_request() {
+        let mut service = RateLimitLayer::with_strategy(AlwaysAllow).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_can_reject_request() {
+        let mut service = RateLimitLayer::with_strategy(AlwaysLimited).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
     }
 
     #[tokio::test]

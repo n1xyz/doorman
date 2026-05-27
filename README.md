@@ -139,7 +139,12 @@ used directly.
 
 ## HTTP Layer
 
-`RateLimitLayer` is a Tower layer that applies a request-counting strategy.
+`RateLimitLayer` is a Tower layer that applies a pre-request rate-limit
+strategy. `RequestCountByIp` is the built-in strategy for fixed-cost request
+limits keyed by client IP: it extracts the client IP, applies whitelist bypasses,
+consumes one request unit, and stores the resulting `IpKey` in request
+extensions. Applications that need a different key or policy can provide their
+own type that implements `RateLimitStrategy`.
 
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};

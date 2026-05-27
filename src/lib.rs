@@ -8,9 +8,10 @@
 //! request limits and a [`DurationBudgetLimiter`] for post-work duration
 //! accounting, both keyed by [`IpKey`] or by an application-specific key type.
 //!
-//! The optional [`http`] module provides HTTP client IP extraction and a Tower
-//! layer for fixed-cost request limiting. Route classification and bucket
-//! composition remain application responsibilities.
+//! The optional [`http`] module provides HTTP client IP extraction, a built-in
+//! client-IP request strategy, and a Tower layer that can run any compatible
+//! pre-request strategy. Route classification and bucket composition remain
+//! application responsibilities.
 //!
 //! # Bucket composition
 //!
