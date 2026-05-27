@@ -252,8 +252,29 @@ where
                 state,
                 start,
             } => {
-                let _ = (strategy, state, start);
-                unsafe { Pin::new_unchecked(future) }.poll(cx)
+                let poll = unsafe { Pin::new_unchecked(future) }.poll(cx);
+
+                match poll {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(result) => {
+                        let elapsed = start.elapsed();
+                        let state = state
+                            .take()
+                            .expect("state is present until response completes");
+
+                        let after = strategy.after_response(state, elapsed);
+
+                        match after {
+                            Ok(()) => Poll::Ready(result),
+                            Err(RateLimitRejection::Limited(err)) => {
+                                Poll::Ready(Ok(rate_limited_response(err)))
+                            }
+                            Err(
+                                RateLimitRejection::MissingPeer | RateLimitRejection::ExtractFailed,
+                            ) => Poll::Ready(Ok(server_error_response())),
+                        }
+                    }
+                }
             }
             RateLimitFuture::Limited(err) => Poll::Ready(Ok(rate_limited_response(*err))),
             RateLimitFuture::MissingPeer | RateLimitFuture::ExtractFailed => {
