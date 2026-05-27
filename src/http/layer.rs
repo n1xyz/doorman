@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use http::{Request, Response, StatusCode};
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
+use tokio::time::{Sleep, sleep};
 use tower::{Layer, Service};
 
 use crate::http::extract::split_nets;
@@ -121,6 +122,11 @@ pub trait RateLimitStrategy<B>: Clone {
         let _ = (state, elapsed);
         Ok(())
     }
+
+    fn timeout(&self, state: &Self::State) -> Option<Duration> {
+        let _ = state;
+        None
+    }
 }
 
 impl<B> RateLimitStrategy<B> for RequestCountByIp {
@@ -187,11 +193,15 @@ where
         match self.strategy.before_request(&mut req) {
             Ok(state) => {
                 let start = Instant::now();
+                let timeout = self.strategy.timeout(&state);
+                let timeout = timeout.map(|duration| Box::pin(sleep(duration)));
+
                 RateLimitFuture::Allowed {
                     future: self.inner.call(req),
                     strategy: self.strategy.clone(),
                     state: Some(state),
                     start,
+                    timeout,
                 }
             }
             Err(RateLimitRejection::Limited(err)) => RateLimitFuture::Limited(err),
@@ -228,6 +238,7 @@ where
         strategy: T,
         state: Option<T::State>,
         start: Instant,
+        timeout: Option<Pin<Box<Sleep>>>,
     },
     Limited(RateLimitError),
     MissingPeer,
@@ -251,6 +262,7 @@ where
                 strategy,
                 state,
                 start,
+                timeout,
             } => {
                 let poll = unsafe { Pin::new_unchecked(future) }.poll(cx);
 
