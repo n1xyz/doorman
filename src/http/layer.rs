@@ -3,6 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use http::{Request, Response, StatusCode};
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
@@ -104,16 +105,27 @@ pub struct RateLimitLayer<T> {
 /// Implement this trait for custom pre-request policies, such as API-key
 /// limits, user-account limits, or route-specific request costs.
 pub trait RateLimitStrategy<B>: Clone {
+    type State;
+
     /// Checks and optionally mutates a request before the inner service runs.
     ///
     /// Returning `Ok(())` allows the request to continue. Returning
     /// [`RateLimitRejection`] causes [`RateLimitLayer`] to return the matching
     /// rejection response without calling the inner service.
-    fn before_request(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection>;
+    fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection>;
+    fn after_response(
+        &self,
+        state: Self::State,
+        elapsed: Duration,
+    ) -> Result<(), RateLimitRejection> {
+        let _ = (state, elapsed);
+        Ok(())
+    }
 }
 
 impl<B> RateLimitStrategy<B> for RequestCountByIp {
-    fn before_request(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+    type State = ();
+    fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
         self.check_before_request(req)
     }
 }
@@ -165,7 +177,7 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = RateLimitFuture<S::Future, B>;
+    type Future = RateLimitFuture<S::Future, B, T>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
@@ -173,7 +185,15 @@ where
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
         match self.strategy.before_request(&mut req) {
-            Ok(()) => RateLimitFuture::Allowed(self.inner.call(req)),
+            Ok(state) => {
+                let start = Instant::now();
+                RateLimitFuture::Allowed {
+                    future: self.inner.call(req),
+                    strategy: self.strategy.clone(),
+                    state: Some(state),
+                    start,
+                }
+            }
             Err(RateLimitRejection::Limited(err)) => RateLimitFuture::Limited(err),
             Err(RateLimitRejection::MissingPeer) => RateLimitFuture::MissingPeer,
             Err(RateLimitRejection::ExtractFailed) => RateLimitFuture::ExtractFailed,
@@ -199,25 +219,42 @@ fn peer_addr<B>(req: &Request<B>) -> Option<SocketAddr> {
     None
 }
 
-pub enum RateLimitFuture<F, B> {
-    Allowed(F),
+pub enum RateLimitFuture<F, B, T>
+where
+    T: RateLimitStrategy<B>,
+{
+    Allowed {
+        future: F,
+        strategy: T,
+        state: Option<T::State>,
+        start: Instant,
+    },
     Limited(RateLimitError),
     MissingPeer,
     ExtractFailed,
     _Body(std::marker::PhantomData<B>),
 }
 
-impl<F, B, E> Future for RateLimitFuture<F, B>
+impl<F, B, E, T> Future for RateLimitFuture<F, B, T>
 where
     F: Future<Output = Result<Response<B>, E>>,
     B: Default,
+    T: RateLimitStrategy<B>,
 {
     type Output = Result<Response<B>, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: We never move F out of self, and all other variants are trivially Unpin.
         match unsafe { self.get_unchecked_mut() } {
-            RateLimitFuture::Allowed(fut) => unsafe { Pin::new_unchecked(fut) }.poll(cx),
+            RateLimitFuture::Allowed {
+                future,
+                strategy,
+                state,
+                start,
+            } => {
+                let _ = (strategy, state, start);
+                unsafe { Pin::new_unchecked(future) }.poll(cx)
+            }
             RateLimitFuture::Limited(err) => Poll::Ready(Ok(rate_limited_response(*err))),
             RateLimitFuture::MissingPeer | RateLimitFuture::ExtractFailed => {
                 Poll::Ready(Ok(server_error_response()))
@@ -267,6 +304,7 @@ mod tests {
     struct AlwaysAllow;
 
     impl<B> RateLimitStrategy<B> for AlwaysAllow {
+        type State = ();
         fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
             Ok(())
         }
@@ -276,6 +314,7 @@ mod tests {
     struct AlwaysLimited;
 
     impl<B> RateLimitStrategy<B> for AlwaysLimited {
+        type State = ();
         fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
             Err(RateLimitRejection::Limited(RateLimitError::limited(
                 Duration::from_secs(2),
