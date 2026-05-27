@@ -315,8 +315,10 @@ mod tests {
     use crate::Policy;
     use http::header::RETRY_AFTER;
     use ipnet::IpNet;
+    use std::cell::Cell;
     use std::convert::Infallible;
     use std::num::NonZeroU32;
+    use std::rc::Rc;
     use std::time::Duration;
     use tower::ServiceExt;
     use tower::service_fn;
@@ -337,6 +339,49 @@ mod tests {
     impl<B> RateLimitStrategy<B> for AlwaysLimited {
         type State = ();
         fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Err(RateLimitRejection::Limited(RateLimitError::limited(
+                Duration::from_secs(2),
+            )))
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordsAfterResponse {
+        called: Rc<Cell<bool>>,
+    }
+
+    impl<B> RateLimitStrategy<B> for RecordsAfterResponse {
+        type State = ();
+
+        fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Ok(())
+        }
+
+        fn after_response(
+            &self,
+            _state: Self::State,
+            _elapsed: Duration,
+        ) -> Result<(), RateLimitRejection> {
+            self.called.set(true);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct RejectsAfterResponse;
+
+    impl<B> RateLimitStrategy<B> for RejectsAfterResponse {
+        type State = ();
+
+        fn before_request(&self, _req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+            Ok(())
+        }
+
+        fn after_response(
+            &self,
+            _state: Self::State,
+            _elapsed: Duration,
+        ) -> Result<(), RateLimitRejection> {
             Err(RateLimitRejection::Limited(RateLimitError::limited(
                 Duration::from_secs(2),
             )))
@@ -419,6 +464,48 @@ mod tests {
     #[tokio::test]
     async fn custom_strategy_can_reject_request() {
         let mut service = RateLimitLayer::with_strategy(AlwaysLimited).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_after_response_runs_after_inner_service() {
+        let called = Rc::new(Cell::new(false));
+        let strategy = RecordsAfterResponse {
+            called: Rc::clone(&called),
+        };
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(called.get());
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_after_response_can_reject_request() {
+        let mut service = RateLimitLayer::with_strategy(RejectsAfterResponse).layer(ok_service());
 
         let response = service
             .ready()
