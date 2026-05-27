@@ -8,9 +8,11 @@
 //! request limits and a [`DurationBudgetLimiter`] for post-work duration
 //! accounting, both keyed by [`IpKey`] or by an application-specific key type.
 //!
-//! The optional [`http`] module provides HTTP client IP extraction, a built-in
-//! client-IP request strategy, and a Tower layer that can run any compatible
-//! pre-request strategy. Route classification and bucket composition remain
+//! The optional [`http`] module provides HTTP client IP extraction, built-in
+//! client-IP request and elapsed-time strategies, and a Tower layer that can run
+//! compatible lifecycle strategies. Strategies can check requests before the
+//! inner service runs, account after the service future completes, and provide
+//! an optional timeout. Route classification and bucket composition remain
 //! application responsibilities.
 //!
 //! # Bucket composition
@@ -77,6 +79,33 @@
 //! // Run the database work here.
 //! timer.consume_elapsed()?;
 //! # Ok::<(), doorman::RateLimitError>(())
+//! ```
+//!
+//! # HTTP elapsed-time budgets
+//!
+//! The HTTP layer can also account elapsed inner-service future time with
+//! [`http::DurationBudgetByIp`]. This measures until the inner service future
+//! resolves; it does not include response body streaming after that point.
+//!
+//! ```rust
+//! use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
+//! use doorman::{DurationBudgetLimiter, IpKey, Policy};
+//! use ipnet::IpNet;
+//! use std::num::NonZeroU32;
+//! use std::sync::Arc;
+//! use std::time::Duration;
+//!
+//! let policy = Policy::per_second(
+//!     NonZeroU32::new(2_000).unwrap(),
+//!     NonZeroU32::new(2_000).unwrap(),
+//! );
+//! let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+//! let extractor =
+//!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+//!
+//! let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::from_secs(2)));
+//! let layer = RateLimitLayer::with_strategy(strategy);
+//! # let _ = layer;
 //! ```
 
 pub mod error;

@@ -148,6 +148,11 @@ accounting keyed by client IP, with an optional per-request timeout.
 Applications that need a different key or policy can provide their own type that
 implements `RateLimitStrategy`.
 
+Strategies have three lifecycle hooks: `before_request`, `after_response`, and
+an optional `timeout`. If a timeout fires before the inner service future
+resolves, the layer returns `429 Too Many Requests` and still runs
+`after_response` so elapsed work can be accounted.
+
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
 use doorman::{IpKey, Policy, RequestRateLimiter};
