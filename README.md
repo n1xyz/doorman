@@ -168,7 +168,7 @@ let policy = Policy::per_second(
 let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let strategy = RequestCountByIp::new(limiter, extractor);
+let strategy = RequestCountByIp::with_limiter(limiter, extractor);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -191,7 +191,8 @@ let policy = Policy::per_second(
 let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::from_secs(2)));
+let strategy =
+    DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::from_secs(2));
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -210,7 +211,7 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 # );
 # let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 # let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-let strategy = RequestCountByIp::new(limiter, extractor)
+let strategy = RequestCountByIp::with_limiter(limiter, extractor)
     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```

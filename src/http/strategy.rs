@@ -24,16 +24,21 @@ pub struct DurationBudgetByIp {
 
 impl DurationBudgetByIp {
     /// Creates an elapsed-time budget strategy keyed by client IP.
-    pub fn new(
+    pub fn with_limiter(
         limiter: Arc<DurationBudgetLimiter<IpKey>>,
         extractor: ClientIpExtractor,
-        timeout: Option<Duration>,
     ) -> Self {
         Self {
             limiter,
             extractor,
-            timeout,
+            timeout: None,
         }
+    }
+
+    /// Sets a maximum inner-service future duration before returning `429`.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
     }
 
     fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
@@ -81,7 +86,10 @@ pub struct RequestCountByIp {
 
 impl RequestCountByIp {
     /// Creates a request-counting strategy keyed by client IP.
-    pub fn new(limiter: Arc<RequestRateLimiter<IpKey>>, extractor: ClientIpExtractor) -> Self {
+    pub fn with_limiter(
+        limiter: Arc<RequestRateLimiter<IpKey>>,
+        extractor: ClientIpExtractor,
+    ) -> Self {
         Self {
             limiter,
             extractor,

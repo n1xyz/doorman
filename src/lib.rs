@@ -45,9 +45,9 @@
 //! let general_extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
-//! let action_strategy = RequestCountByIp::new(action_limiter, action_extractor)
+//! let action_strategy = RequestCountByIp::with_limiter(action_limiter, action_extractor)
 //!     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
-//! let general_strategy = RequestCountByIp::new(general_limiter, general_extractor);
+//! let general_strategy = RequestCountByIp::with_limiter(general_limiter, general_extractor);
 //!
 //! let action_layer = RateLimitLayer::with_strategy(action_strategy);
 //! let general_layer = RateLimitLayer::with_strategy(general_strategy);
@@ -103,7 +103,8 @@
 //! let extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
-//! let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::from_secs(2)));
+//! let strategy =
+//!     DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::from_secs(2));
 //! let layer = RateLimitLayer::with_strategy(strategy);
 //! # let _ = layer;
 //! ```

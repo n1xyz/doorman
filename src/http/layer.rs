@@ -82,7 +82,7 @@ where
 }
 
 impl<T> RateLimitLayer<T> {
-    /// Creates a layer from a request-counting strategy.
+    /// Creates a layer from a rate-limit strategy.
     pub fn with_strategy(strategy: T) -> Self {
         Self { strategy }
     }
@@ -357,7 +357,7 @@ mod tests {
         let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        RateLimitLayer::with_strategy(RequestCountByIp::new(limiter, extractor))
+        RateLimitLayer::with_strategy(RequestCountByIp::with_limiter(limiter, extractor))
     }
 
     fn whitelisted_layer() -> RateLimitLayer<RequestCountByIp> {
@@ -365,7 +365,7 @@ mod tests {
         let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = RequestCountByIp::new(limiter, extractor)
+        let strategy = RequestCountByIp::with_limiter(limiter, extractor)
             .with_whitelist(["1.2.3.0/24".parse::<IpNet>().unwrap()]);
         RateLimitLayer::with_strategy(strategy)
     }
@@ -541,7 +541,7 @@ mod tests {
         let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = DurationBudgetByIp::new(limiter, extractor, None);
+        let strategy = DurationBudgetByIp::with_limiter(limiter, extractor);
         let mut service =
             RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
 
@@ -562,7 +562,8 @@ mod tests {
         let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = DurationBudgetByIp::new(limiter, extractor, Some(Duration::ZERO));
+        let strategy =
+            DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::ZERO);
         let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
 
         let response = service
