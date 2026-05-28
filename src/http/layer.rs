@@ -26,6 +26,7 @@ pub enum RateLimitRejection {
 /// The layer owns the Tower mechanics. The strategy owns the policy decision:
 /// what key to extract, what cost to charge, and whether the request should be
 /// rejected before the inner service runs.
+#[derive(Clone)]
 pub struct RateLimitLayer<T> {
     strategy: T,
 }
@@ -62,6 +63,7 @@ pub trait RateLimitStrategy<B>: Clone {
     }
 }
 
+#[derive(Clone)]
 pub struct RateLimitService<S, T> {
     inner: S,
     strategy: T,
