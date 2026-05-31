@@ -7,7 +7,7 @@ use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 
 use crate::http::extract::{ClientIpExtractor, peer_addr, split_nets};
 use crate::http::layer::{RateLimitRejection, RateLimitStrategy};
-use crate::{DurationBudgetLimiter, IpKey, RequestRateLimiter};
+use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
 
 /// Elapsed-time budget accounting by client IP.
 ///
@@ -24,10 +24,8 @@ pub struct DurationBudgetByIp {
 
 impl DurationBudgetByIp {
     /// Creates an elapsed-time budget strategy keyed by client IP.
-    pub fn with_limiter(
-        limiter: Arc<DurationBudgetLimiter<IpKey>>,
-        extractor: ClientIpExtractor,
-    ) -> Self {
+    pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
+        let limiter = Arc::new(DurationBudgetLimiter::new(policy));
         Self {
             limiter,
             extractor,
@@ -86,10 +84,8 @@ pub struct RequestCountByIp {
 
 impl RequestCountByIp {
     /// Creates a request-counting strategy keyed by client IP.
-    pub fn with_limiter(
-        limiter: Arc<RequestRateLimiter<IpKey>>,
-        extractor: ClientIpExtractor,
-    ) -> Self {
+    pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
+        let limiter = Arc::new(RequestRateLimiter::new(policy));
         Self {
             limiter,
             extractor,

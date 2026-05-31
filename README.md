@@ -144,7 +144,7 @@ used directly.
 `RateLimitLayer` is a Tower layer that applies a rate-limit strategy.
 `RequestCountByIp` is the built-in strategy for fixed-cost request limits keyed
 by client IP: it extracts the client IP, applies whitelist bypasses, consumes
-one request unit, and stores the resulting `IpKey` in request extensions.
+one request unit, and stores the resolved client identity for downstream code.
 `DurationBudgetByIp` is the built-in strategy for elapsed inner-service time
 accounting keyed by client IP, with an optional per-request timeout.
 Applications that need a different key or policy can provide their own type that
@@ -158,19 +158,17 @@ future, but only async work that respects cancellation is actually stopped.
 
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
-use doorman::{IpKey, Policy, RequestRateLimiter};
+use doorman::Policy;
 use ipnet::IpNet;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 let policy = Policy {
     rate_per_second: NonZeroU32::new(200).unwrap(),
     burst: NonZeroU32::new(400).unwrap(),
 };
-let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let strategy = RequestCountByIp::with_limiter(limiter, extractor);
+let strategy = RequestCountByIp::with_policy(policy, extractor);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -180,21 +178,19 @@ streaming after that point is not included.
 
 ```rust
 use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
-use doorman::{DurationBudgetLimiter, IpKey, Policy};
+use doorman::Policy;
 use ipnet::IpNet;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::time::Duration;
 
 let policy = Policy {
     rate_per_second: NonZeroU32::new(2_000).unwrap(),
     burst: NonZeroU32::new(2_000).unwrap(),
 };
-let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
 let strategy =
-    DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::from_secs(2));
+    DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::from_secs(2));
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -203,17 +199,15 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 
 ```rust
 # use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
-# use doorman::{IpKey, Policy, RequestRateLimiter};
+# use doorman::Policy;
 # use ipnet::IpNet;
 # use std::num::NonZeroU32;
-# use std::sync::Arc;
 # let policy = Policy {
 #     rate_per_second: NonZeroU32::new(200).unwrap(),
 #     burst: NonZeroU32::new(400).unwrap(),
 # };
-# let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 # let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-let strategy = RequestCountByIp::with_limiter(limiter, extractor)
+let strategy = RequestCountByIp::with_policy(policy, extractor)
     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```

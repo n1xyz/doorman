@@ -23,10 +23,9 @@
 //!
 //! ```rust
 //! use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
-//! use doorman::{IpKey, Policy, RequestRateLimiter};
+//! use doorman::Policy;
 //! use ipnet::IpNet;
 //! use std::num::NonZeroU32;
-//! use std::sync::Arc;
 //!
 //! let action_policy = Policy {
 //!     rate_per_second: NonZeroU32::new(200).unwrap(),
@@ -37,17 +36,14 @@
 //!     burst: NonZeroU32::new(50).unwrap(),
 //! };
 //!
-//! let action_limiter = Arc::new(RequestRateLimiter::<IpKey>::new(action_policy));
-//! let general_limiter = Arc::new(RequestRateLimiter::<IpKey>::new(general_policy));
-//!
 //! let action_extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //! let general_extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
-//! let action_strategy = RequestCountByIp::with_limiter(action_limiter, action_extractor)
+//! let action_strategy = RequestCountByIp::with_policy(action_policy, action_extractor)
 //!     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
-//! let general_strategy = RequestCountByIp::with_limiter(general_limiter, general_extractor);
+//! let general_strategy = RequestCountByIp::with_policy(general_policy, general_extractor);
 //!
 //! let action_layer = RateLimitLayer::with_strategy(action_strategy);
 //! let general_layer = RateLimitLayer::with_strategy(general_strategy);
@@ -89,22 +85,20 @@
 //!
 //! ```rust
 //! use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
-//! use doorman::{DurationBudgetLimiter, IpKey, Policy};
+//! use doorman::Policy;
 //! use ipnet::IpNet;
 //! use std::num::NonZeroU32;
-//! use std::sync::Arc;
 //! use std::time::Duration;
 //!
 //! let policy = Policy {
 //!     rate_per_second: NonZeroU32::new(2_000).unwrap(),
 //!     burst: NonZeroU32::new(2_000).unwrap(),
 //! };
-//! let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
 //! let extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
 //! let strategy =
-//!     DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::from_secs(2));
+//!     DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::from_secs(2));
 //! let layer = RateLimitLayer::with_strategy(strategy);
 //! # let _ = layer;
 //! ```

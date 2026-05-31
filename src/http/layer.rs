@@ -256,7 +256,7 @@ fn server_error_response<B: Default>() -> Response<B> {
 mod tests {
     use super::*;
     use crate::http::{ClientIpExtractor, DurationBudgetByIp, RequestCountByIp};
-    use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
+    use crate::{IpKey, Policy};
     use http::header::RETRY_AFTER;
     use ipnet::IpNet;
     use std::cell::Cell;
@@ -264,7 +264,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::num::NonZeroU32;
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
     use tower::ServiceExt;
     use tower::service_fn;
@@ -365,10 +364,9 @@ mod tests {
             rate_per_second: NonZeroU32::new(1).unwrap(),
             burst: NonZeroU32::new(1).unwrap(),
         };
-        let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        RateLimitLayer::with_strategy(RequestCountByIp::with_limiter(limiter, extractor))
+        RateLimitLayer::with_strategy(RequestCountByIp::with_policy(policy, extractor))
     }
 
     fn whitelisted_layer() -> RateLimitLayer<RequestCountByIp> {
@@ -376,10 +374,9 @@ mod tests {
             rate_per_second: NonZeroU32::new(1).unwrap(),
             burst: NonZeroU32::new(1).unwrap(),
         };
-        let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = RequestCountByIp::with_limiter(limiter, extractor)
+        let strategy = RequestCountByIp::with_policy(policy, extractor)
             .with_whitelist(["1.2.3.0/24".parse::<IpNet>().unwrap()]);
         RateLimitLayer::with_strategy(strategy)
     }
@@ -555,10 +552,9 @@ mod tests {
             rate_per_second: NonZeroU32::new(1).unwrap(),
             burst: NonZeroU32::new(1).unwrap(),
         };
-        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = DurationBudgetByIp::with_limiter(limiter, extractor);
+        let strategy = DurationBudgetByIp::with_policy(policy, extractor);
         let mut service =
             RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
 
@@ -579,11 +575,10 @@ mod tests {
             rate_per_second: NonZeroU32::new(10).unwrap(),
             burst: NonZeroU32::new(10).unwrap(),
         };
-        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
         let strategy =
-            DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::ZERO);
+            DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::ZERO);
         let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
 
         let response = service
