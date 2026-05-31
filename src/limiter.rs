@@ -162,8 +162,10 @@ mod tests {
         FakeRelativeClock,
     ) {
         let clock = FakeRelativeClock::default();
-        let policy =
-            Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(burst).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(burst).unwrap(),
+        };
         let limiter = RateLimiter::with_clock(policy, clock.clone());
         (limiter, clock)
     }
@@ -175,8 +177,10 @@ mod tests {
         FakeRelativeClock,
     ) {
         let clock = FakeRelativeClock::default();
-        let policy =
-            Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(burst).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(burst).unwrap(),
+        };
         let limiter = RateLimiter::with_clock(policy, clock.clone());
         (limiter, clock)
     }

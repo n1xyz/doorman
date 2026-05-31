@@ -361,7 +361,10 @@ mod tests {
     }
 
     fn layer() -> RateLimitLayer<RequestCountByIp> {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
@@ -369,7 +372,10 @@ mod tests {
     }
 
     fn whitelisted_layer() -> RateLimitLayer<RequestCountByIp> {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let limiter = Arc::new(RequestRateLimiter::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
@@ -545,7 +551,10 @@ mod tests {
 
     #[tokio::test]
     async fn duration_budget_by_ip_charges_elapsed_time_after_response() {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
@@ -566,7 +575,10 @@ mod tests {
 
     #[tokio::test]
     async fn duration_budget_by_ip_timeout_returns_429() {
-        let policy = Policy::per_second(NonZeroU32::new(10).unwrap(), NonZeroU32::new(10).unwrap());
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(10).unwrap(),
+            burst: NonZeroU32::new(10).unwrap(),
+        };
         let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
