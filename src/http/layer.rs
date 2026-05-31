@@ -42,12 +42,16 @@ pub struct RateLimitLayer<T> {
 pub trait RateLimitStrategy<B>: Clone {
     type State;
 
-    /// Checks and optionally mutates a request before the inner service runs.
+    /// Decides whether a request may run before the inner service is called.
     ///
-    /// Returning `Ok(())` allows the request to continue. Returning
+    /// Returning `Ok(state)` allows the request to continue and stores `state`
+    /// until the response future completes. Returning
     /// [`RateLimitRejection`] causes [`RateLimitLayer`] to return the matching
     /// rejection response without calling the inner service.
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection>;
+
+    /// Accounts for completed or timed-out work after the inner service future
+    /// finishes or is cancelled by this layer's timeout.
     fn after_response(
         &self,
         state: Self::State,
@@ -57,6 +61,8 @@ pub trait RateLimitStrategy<B>: Clone {
         Ok(())
     }
 
+    /// Returns a maximum duration for the inner service future, if this strategy
+    /// wants one.
     fn timeout(&self, state: &Self::State) -> Option<Duration> {
         let _ = state;
         None

@@ -10,10 +10,10 @@
 //!
 //! The optional [`http`] module provides HTTP client IP extraction, built-in
 //! client-IP request and elapsed-time strategies, and a Tower layer that can run
-//! compatible lifecycle strategies. Strategies can check requests before the
-//! inner service runs, account after the service future completes, and provide
-//! an optional timeout. Route classification and bucket composition remain
-//! application responsibilities.
+//! compatible lifecycle strategies. Strategies can decide whether a request is
+//! allowed before the inner service runs, account after the service future
+//! completes, and provide an optional timeout. Route classification and bucket
+//! composition remain application responsibilities.
 //!
 //! # Bucket composition
 //!

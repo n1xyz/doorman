@@ -46,13 +46,13 @@ where
         }
     }
 
-    /// Checks and consumes one unit for `key`.
-    pub fn check_and_consume_one(&self, key: &K) -> Result<(), RateLimitError> {
-        self.check_and_consume_n(key, NonZeroU32::new(1).unwrap())
+    /// Consumes one unit for `key`.
+    pub fn consume_one(&self, key: &K) -> Result<(), RateLimitError> {
+        self.consume_units(key, NonZeroU32::new(1).unwrap())
     }
 
-    /// Checks and consumes `units` for `key` atomically.
-    pub fn check_and_consume_n(&self, key: &K, units: NonZeroU32) -> Result<(), RateLimitError> {
+    /// Consumes `units` for `key` atomically.
+    pub fn consume_units(&self, key: &K, units: NonZeroU32) -> Result<(), RateLimitError> {
         match self.inner.check_key_n(key, units) {
             Ok(Ok(())) => Ok(()),
 
@@ -74,9 +74,9 @@ where
     K: Eq + Hash + Clone,
     C: Clock,
 {
-    /// Checks and consumes one request unit for `key`.
-    pub fn check_request(&self, key: &K) -> Result<(), RateLimitError> {
-        self.check_and_consume_one(key)
+    /// Consumes one request unit for `key`.
+    pub fn consume_request(&self, key: &K) -> Result<(), RateLimitError> {
+        self.consume_one(key)
     }
 }
 
@@ -103,7 +103,7 @@ where
 
             NonZeroU32::new(millis).unwrap()
         };
-        self.check_and_consume_n(key, units)
+        self.consume_units(key, units)
     }
 }
 
@@ -185,15 +185,15 @@ mod tests {
     fn allows_requests_under_quota() {
         let (limiter, _) = make_request_limiter(1);
 
-        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.consume_request(&1).is_ok());
     }
 
     #[test]
     fn denies_requests_over_quota() {
         let (limiter, _) = make_request_limiter(1);
 
-        assert!(limiter.check_request(&1).is_ok());
-        let err = limiter.check_request(&1).unwrap_err();
+        assert!(limiter.consume_request(&1).is_ok());
+        let err = limiter.consume_request(&1).unwrap_err();
         assert!(matches!(err, RateLimitError::Limited { .. }));
     }
 
@@ -201,36 +201,36 @@ mod tests {
     fn independent_keys_have_independent_quota() {
         let (limiter, _) = make_request_limiter(1);
 
-        assert!(limiter.check_request(&1).is_ok());
-        let err = limiter.check_request(&1).unwrap_err();
+        assert!(limiter.consume_request(&1).is_ok());
+        let err = limiter.consume_request(&1).unwrap_err();
         assert!(matches!(err, RateLimitError::Limited { .. }));
 
-        assert!(limiter.check_request(&2).is_ok());
+        assert!(limiter.consume_request(&2).is_ok());
     }
 
     #[test]
     fn quota_replenishes_after_time() {
         let (limiter, clock) = make_request_limiter(1);
 
-        assert!(limiter.check_request(&1).is_ok());
-        let err = limiter.check_request(&1).unwrap_err();
+        assert!(limiter.consume_request(&1).is_ok());
+        let err = limiter.consume_request(&1).unwrap_err();
         assert!(matches!(err, RateLimitError::Limited { .. }));
 
         clock.advance(Duration::from_secs(1));
 
-        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.consume_request(&1).is_ok());
     }
 
     #[test]
     fn retain_recent_doesnt_panic() {
         let (limiter, clock) = make_request_limiter(1);
 
-        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.consume_request(&1).is_ok());
 
         clock.advance(Duration::from_secs(60));
         limiter.retain_recent();
 
-        assert!(limiter.check_request(&1).is_ok());
+        assert!(limiter.consume_request(&1).is_ok());
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
 
         assert!(
             limiter
-                .check_and_consume_n(&1, NonZeroU32::new(20).unwrap())
+                .consume_units(&1, NonZeroU32::new(20).unwrap())
                 .is_ok()
         );
     }
@@ -249,7 +249,7 @@ mod tests {
         let (limiter, _) = make_request_limiter(20);
 
         let err = limiter
-            .check_and_consume_n(&1, NonZeroU32::new(40).unwrap())
+            .consume_units(&1, NonZeroU32::new(40).unwrap())
             .unwrap_err();
 
         assert!(matches!(err, RateLimitError::InsufficientCapacity));
@@ -261,10 +261,10 @@ mod tests {
 
         assert!(
             limiter
-                .check_and_consume_n(&1, NonZeroU32::new(3).unwrap())
+                .consume_units(&1, NonZeroU32::new(3).unwrap())
                 .is_ok()
         );
-        let err = limiter.check_and_consume_one(&1).unwrap_err();
+        let err = limiter.consume_one(&1).unwrap_err();
 
         assert!(matches!(err, RateLimitError::Limited { .. }));
     }

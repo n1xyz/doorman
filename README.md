@@ -31,6 +31,8 @@ separate budgets.
 ## Request Limits
 
 Use `RequestRateLimiter` when each event costs one request unit.
+Calling `consume_request` is not a read-only check: it spends capacity for the
+given key when the request is allowed.
 
 ```rust
 use doorman::{IpKey, Policy, RequestRateLimiter};
@@ -44,7 +46,7 @@ let policy = Policy::per_second(
 let limiter = RequestRateLimiter::<IpKey>::new(policy);
 
 let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
-limiter.check_request(&key)?;
+limiter.consume_request(&key)?;
 # Ok::<(), doorman::RateLimitError>(())
 ```
 
@@ -100,7 +102,7 @@ charged.
 Duration charging rules:
 
 ```text
-0ms duration        -> no-op
+Duration::ZERO      -> no-op
 0 < duration < 1ms  -> consumes 1 unit
 N ms duration       -> consumes N units
 too large for u32   -> InsufficientCapacity

@@ -41,7 +41,7 @@ impl DurationBudgetByIp {
         self
     }
 
-    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
+    fn prepare_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
         let (_, key) = extract_ip_key(&self.extractor, req)?;
 
         req.extensions_mut().insert(key);
@@ -53,7 +53,7 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
     type State = IpKey;
 
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
-        self.check_before_request(req)
+        self.prepare_request(req)
     }
 
     fn after_response(
@@ -115,7 +115,7 @@ impl RequestCountByIp {
         }
     }
 
-    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+    fn prepare_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
         let (ip, key) = extract_ip_key(&self.extractor, req)?;
 
         if self.is_whitelisted(ip) {
@@ -124,7 +124,7 @@ impl RequestCountByIp {
         }
 
         self.limiter
-            .check_request(&key)
+            .consume_request(&key)
             .map_err(RateLimitRejection::Limited)?;
 
         req.extensions_mut().insert(key);
@@ -136,7 +136,7 @@ impl<B> RateLimitStrategy<B> for RequestCountByIp {
     type State = ();
 
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
-        self.check_before_request(req)
+        self.prepare_request(req)
     }
 }
 
