@@ -90,19 +90,10 @@ where
     /// Zero duration is a no-op. Nonzero durations below one millisecond are
     /// rounded up to one unit.
     pub fn consume_duration(&self, key: &K, duration: Duration) -> Result<(), RateLimitError> {
-        if duration.is_zero() {
+        let Some(units) = duration_to_units(duration)? else {
             return Ok(());
-        }
-
-        let millis = duration.as_millis();
-
-        let units = if millis == 0 {
-            NonZeroU32::new(1).unwrap()
-        } else {
-            let millis = u32::try_from(millis).map_err(|_| RateLimitError::InsufficientCapacity)?;
-
-            NonZeroU32::new(millis).unwrap()
         };
+
         self.consume_units(key, units)
     }
 }
@@ -146,6 +137,22 @@ where
         self.limiter
             .consume_duration(self.key, self.start.elapsed())
     }
+}
+
+fn duration_to_units(duration: Duration) -> Result<Option<NonZeroU32>, RateLimitError> {
+    if duration.is_zero() {
+        return Ok(None);
+    }
+
+    let millis = duration.as_millis();
+
+    if millis == 0 {
+        return Ok(Some(NonZeroU32::new(1).unwrap()));
+    }
+
+    let millis = u32::try_from(millis).map_err(|_| RateLimitError::InsufficientCapacity)?;
+
+    Ok(Some(NonZeroU32::new(millis).unwrap()))
 }
 
 #[cfg(test)]
@@ -355,5 +362,43 @@ mod tests {
             .consume_duration(&1, Duration::from_millis(1))
             .unwrap_err();
         assert!(matches!(err, RateLimitError::Limited { .. }));
+    }
+    #[test]
+    fn zero_duration_converts_to_no_units() {
+        assert_eq!(duration_to_units(Duration::ZERO).unwrap(), None);
+    }
+
+    #[test]
+    fn sub_millisecond_duration_converts_to_one_unit() {
+        assert_eq!(
+            duration_to_units(Duration::from_nanos(1)).unwrap(),
+            Some(NonZeroU32::new(1).unwrap())
+        );
+
+        assert_eq!(
+            duration_to_units(Duration::from_micros(999)).unwrap(),
+            Some(NonZeroU32::new(1).unwrap())
+        );
+    }
+    #[test]
+    fn millisecond_duration_converts_to_millisecond_units() {
+        assert_eq!(
+            duration_to_units(Duration::from_millis(1)).unwrap(),
+            Some(NonZeroU32::new(1).unwrap())
+        );
+
+        assert_eq!(
+            duration_to_units(Duration::from_millis(2)).unwrap(),
+            Some(NonZeroU32::new(2).unwrap())
+        );
+    }
+
+    #[test]
+    fn duration_too_large_for_u32_units_returns_insufficient_capacity() {
+        let duration = Duration::from_millis(u64::from(u32::MAX) + 1);
+
+        let err = duration_to_units(duration).unwrap_err();
+
+        assert!(matches!(err, RateLimitError::InsufficientCapacity));
     }
 }

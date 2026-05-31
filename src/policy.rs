@@ -6,8 +6,11 @@ use std::num::NonZeroU32;
 /// the maximum number of units that can be consumed in a burst.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Policy {
-    pub rate_per_second: NonZeroU32, // units replenished per second
-    pub burst: NonZeroU32,           // max temp capacity
+    /// Units replenished per second.
+    pub rate_per_second: NonZeroU32,
+
+    /// Maximum burst capacity.
+    pub burst: NonZeroU32,
 }
 
 impl Policy {
