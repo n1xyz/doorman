@@ -51,7 +51,8 @@ impl ClientIpExtractor {
         }
     }
 
-    /// Extracts the real client IP and converts it into an [`IpKey`].
+    /// Extracts the real client IP and converts it into an [`IpKey`] for
+    /// low-level keyed limiters.
     pub fn extract_key(
         &self,
         peer_addr: SocketAddr,

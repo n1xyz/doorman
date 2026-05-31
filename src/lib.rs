@@ -6,7 +6,9 @@
 //!
 //! For example, a service can use a [`RequestRateLimiter`] for fixed-cost
 //! request limits and a [`DurationBudgetLimiter`] for post-work duration
-//! accounting, both keyed by [`IpKey`] or by an application-specific key type.
+//! accounting. Low-level limiters can be keyed by [`IpKey`] or by an
+//! application-specific key type; the built-in HTTP strategies handle client-IP
+//! keys internally.
 //!
 //! The optional [`http`] module provides HTTP client IP extraction, built-in
 //! client-IP request and elapsed-time strategies, and a Tower layer that can run

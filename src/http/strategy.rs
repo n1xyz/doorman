@@ -73,7 +73,7 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
 ///
 /// This is the built-in [`RateLimitStrategy`] for the common HTTP case: extract
 /// the real client IP, optionally bypass whitelisted networks, consume one
-/// request unit, and store the resulting [`IpKey`] in request extensions.
+/// request unit, and store the resolved client identity for downstream code.
 #[derive(Clone)]
 pub struct RequestCountByIp {
     limiter: Arc<RequestRateLimiter<IpKey>>,

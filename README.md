@@ -15,7 +15,9 @@ read requests, and another for database time budgets.
 
 ## Core Model
 
-Each limiter has one unit meaning.
+Each limiter has one unit meaning. Low-level limiters are generic over the key
+type, so applications can key them by IP, API key, account ID, or another stable
+identifier.
 
 ```text
 RequestRateLimiter<IpKey>
@@ -110,7 +112,9 @@ too large for u32   -> InsufficientCapacity
 
 ## IP Keys
 
-`IpKey` is a convenience key type for IP-based limiters.
+`IpKey` is a convenience key type for low-level IP-based limiters. The built-in
+HTTP strategies construct and use this key internally, so normal HTTP middleware
+callers usually only provide a `Policy` and a `ClientIpExtractor`.
 
 ```text
 IPv4 -> exact u32 address bits embedded in an internal sentinel range
