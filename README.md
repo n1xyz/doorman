@@ -39,10 +39,10 @@ use doorman::{IpKey, Policy, RequestRateLimiter};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(200).unwrap(),
-    NonZeroU32::new(400).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(200).unwrap(),
+    burst: NonZeroU32::new(400).unwrap(),
+};
 let limiter = RequestRateLimiter::<IpKey>::new(policy);
 
 let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
@@ -61,10 +61,10 @@ use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(2_000).unwrap(),
-    NonZeroU32::new(2_000).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(2_000).unwrap(),
+    burst: NonZeroU32::new(2_000).unwrap(),
+};
 let db_budget = DurationBudgetLimiter::<IpKey>::new(policy);
 
 let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
@@ -81,10 +81,10 @@ work and explicitly consume it after the work finishes.
 # use doorman::{DurationBudgetLimiter, IpKey, Policy};
 # use std::net::IpAddr;
 # use std::num::NonZeroU32;
-# let policy = Policy::per_second(
-#     NonZeroU32::new(2_000).unwrap(),
-#     NonZeroU32::new(2_000).unwrap(),
-# );
+# let policy = Policy {
+#     rate_per_second: NonZeroU32::new(2_000).unwrap(),
+#     burst: NonZeroU32::new(2_000).unwrap(),
+# };
 # let db_budget = DurationBudgetLimiter::<IpKey>::new(policy);
 # let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
 let timer = db_budget.start_timer(&key);
@@ -163,10 +163,10 @@ use ipnet::IpNet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(200).unwrap(),
-    NonZeroU32::new(400).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(200).unwrap(),
+    burst: NonZeroU32::new(400).unwrap(),
+};
 let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
@@ -186,10 +186,10 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(2_000).unwrap(),
-    NonZeroU32::new(2_000).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(2_000).unwrap(),
+    burst: NonZeroU32::new(2_000).unwrap(),
+};
 let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
@@ -207,10 +207,10 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 # use ipnet::IpNet;
 # use std::num::NonZeroU32;
 # use std::sync::Arc;
-# let policy = Policy::per_second(
-#     NonZeroU32::new(200).unwrap(),
-#     NonZeroU32::new(400).unwrap(),
-# );
+# let policy = Policy {
+#     rate_per_second: NonZeroU32::new(200).unwrap(),
+#     burst: NonZeroU32::new(400).unwrap(),
+# };
 # let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
 # let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 let strategy = RequestCountByIp::with_limiter(limiter, extractor)
