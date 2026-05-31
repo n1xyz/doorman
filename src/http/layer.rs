@@ -49,12 +49,16 @@ pub struct RateLimitLayer<T> {
 pub trait RateLimitStrategy<B>: Clone {
     type State;
 
-    /// Checks and optionally mutates a request before the inner service runs.
+    /// Decides whether a request may run before the inner service is called.
     ///
-    /// Returning `Ok(())` allows the request to continue. Returning
+    /// Returning `Ok(state)` allows the request to continue and stores `state`
+    /// until the response future completes. Returning
     /// [`RateLimitRejection`] causes [`RateLimitLayer`] to return the matching
     /// rejection response without calling the inner service.
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection>;
+
+    /// Accounts for completed or timed-out work after the inner service future
+    /// finishes or is cancelled by this layer's timeout.
     fn after_response(
         &self,
         state: Self::State,
@@ -65,6 +69,8 @@ pub trait RateLimitStrategy<B>: Clone {
         Ok(())
     }
 
+    /// Returns a maximum duration for the inner service future, if this strategy
+    /// wants one.
     fn timeout(&self, state: &Self::State) -> Option<Duration> {
         let _ = state;
         None
@@ -287,7 +293,7 @@ fn server_error_response<B: Default>() -> Response<B> {
 mod tests {
     use super::*;
     use crate::http::{ClientIpExtractor, DurationBudgetByIp, RequestCountByIp};
-    use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
+    use crate::{IpKey, Policy};
     use http::header::RETRY_AFTER;
     use ipnet::IpNet;
     use std::cell::Cell;
@@ -295,7 +301,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::num::NonZeroU32;
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::time::Duration;
     use tower::ServiceExt;
     use tower::service_fn;
@@ -421,19 +426,23 @@ mod tests {
     }
 
     fn layer() -> RateLimitLayer<RequestCountByIp> {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
-        let limiter = Arc::new(RequestRateLimiter::new(policy));
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        RateLimitLayer::with_strategy(RequestCountByIp::with_limiter(limiter, extractor))
+        RateLimitLayer::with_strategy(RequestCountByIp::with_policy(policy, extractor))
     }
 
     fn whitelisted_layer() -> RateLimitLayer<RequestCountByIp> {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
-        let limiter = Arc::new(RequestRateLimiter::new(policy));
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = RequestCountByIp::with_limiter(limiter, extractor)
+        let strategy = RequestCountByIp::with_policy(policy, extractor)
             .with_whitelist(["1.2.3.0/24".parse::<IpNet>().unwrap()]);
         RateLimitLayer::with_strategy(strategy)
     }
@@ -637,11 +646,13 @@ mod tests {
 
     #[tokio::test]
     async fn duration_budget_by_ip_charges_elapsed_time_after_response() {
-        let policy = Policy::per_second(NonZeroU32::new(1).unwrap(), NonZeroU32::new(1).unwrap());
-        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = DurationBudgetByIp::with_limiter(limiter, extractor);
+        let strategy = DurationBudgetByIp::with_policy(policy, extractor);
         let mut service =
             RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
 
@@ -658,12 +669,14 @@ mod tests {
 
     #[tokio::test]
     async fn duration_budget_by_ip_timeout_returns_429() {
-        let policy = Policy::per_second(NonZeroU32::new(10).unwrap(), NonZeroU32::new(10).unwrap());
-        let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(10).unwrap(),
+            burst: NonZeroU32::new(10).unwrap(),
+        };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
         let strategy =
-            DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::ZERO);
+            DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::ZERO);
         let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
 
         let response = service

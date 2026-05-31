@@ -15,7 +15,9 @@ read requests, and another for database time budgets.
 
 ## Core Model
 
-Each limiter has one unit meaning.
+Each limiter has one unit meaning. Low-level limiters are generic over the key
+type, so applications can key them by IP, API key, account ID, or another stable
+identifier.
 
 ```text
 RequestRateLimiter<IpKey>
@@ -31,20 +33,22 @@ separate budgets.
 ## Request Limits
 
 Use `RequestRateLimiter` when each event costs one request unit.
+Calling `consume_request` is not a read-only check: it spends capacity for the
+given key when the request is allowed.
 
 ```rust
 use doorman::{IpKey, Policy, RequestRateLimiter};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(200).unwrap(),
-    NonZeroU32::new(400).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(200).unwrap(),
+    burst: NonZeroU32::new(400).unwrap(),
+};
 let limiter = RequestRateLimiter::<IpKey>::new(policy);
 
 let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
-limiter.check_request(&key)?;
+limiter.consume_request(&key)?;
 # Ok::<(), doorman::RateLimitError>(())
 ```
 
@@ -59,10 +63,10 @@ use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(2_000).unwrap(),
-    NonZeroU32::new(2_000).unwrap(),
-);
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(2_000).unwrap(),
+    burst: NonZeroU32::new(2_000).unwrap(),
+};
 let db_budget = DurationBudgetLimiter::<IpKey>::new(policy);
 
 let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
@@ -79,10 +83,10 @@ work and explicitly consume it after the work finishes.
 # use doorman::{DurationBudgetLimiter, IpKey, Policy};
 # use std::net::IpAddr;
 # use std::num::NonZeroU32;
-# let policy = Policy::per_second(
-#     NonZeroU32::new(2_000).unwrap(),
-#     NonZeroU32::new(2_000).unwrap(),
-# );
+# let policy = Policy {
+#     rate_per_second: NonZeroU32::new(2_000).unwrap(),
+#     burst: NonZeroU32::new(2_000).unwrap(),
+# };
 # let db_budget = DurationBudgetLimiter::<IpKey>::new(policy);
 # let key = IpKey::from("1.2.3.4".parse::<IpAddr>().unwrap());
 let timer = db_budget.start_timer(&key);
@@ -100,7 +104,7 @@ charged.
 Duration charging rules:
 
 ```text
-0ms duration        -> no-op
+Duration::ZERO      -> no-op
 0 < duration < 1ms  -> consumes 1 unit
 N ms duration       -> consumes N units
 too large for u32   -> InsufficientCapacity
@@ -108,7 +112,9 @@ too large for u32   -> InsufficientCapacity
 
 ## IP Keys
 
-`IpKey` is a convenience key type for IP-based limiters.
+`IpKey` is a convenience key type for low-level IP-based limiters. The built-in
+HTTP strategies construct and use this key internally, so normal HTTP middleware
+callers usually only provide a `Policy` and a `ClientIpExtractor`.
 
 ```text
 IPv4 -> exact u32 address bits embedded in an internal sentinel range
@@ -142,7 +148,7 @@ used directly.
 `RateLimitLayer` is a Tower layer that applies a rate-limit strategy.
 `RequestCountByIp` is the built-in strategy for fixed-cost request limits keyed
 by client IP: it extracts the client IP, applies whitelist bypasses, consumes
-one request unit, and stores the resulting `IpKey` in request extensions.
+one request unit, and stores the resolved client identity for downstream code.
 `DurationBudgetByIp` is the built-in strategy for elapsed inner-service time
 accounting keyed by client IP, with an optional per-request timeout.
 Applications that need a different key or policy can provide their own type that
@@ -156,19 +162,17 @@ future, but only async work that respects cancellation is actually stopped.
 
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
-use doorman::{IpKey, Policy, RequestRateLimiter};
+use doorman::Policy;
 use ipnet::IpNet;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(200).unwrap(),
-    NonZeroU32::new(400).unwrap(),
-);
-let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(200).unwrap(),
+    burst: NonZeroU32::new(400).unwrap(),
+};
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let strategy = RequestCountByIp::with_limiter(limiter, extractor);
+let strategy = RequestCountByIp::with_policy(policy, extractor);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -178,21 +182,19 @@ streaming after that point is not included.
 
 ```rust
 use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
-use doorman::{DurationBudgetLimiter, IpKey, Policy};
+use doorman::Policy;
 use ipnet::IpNet;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::time::Duration;
 
-let policy = Policy::per_second(
-    NonZeroU32::new(2_000).unwrap(),
-    NonZeroU32::new(2_000).unwrap(),
-);
-let limiter = Arc::new(DurationBudgetLimiter::<IpKey>::new(policy));
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(2_000).unwrap(),
+    burst: NonZeroU32::new(2_000).unwrap(),
+};
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
 let strategy =
-    DurationBudgetByIp::with_limiter(limiter, extractor).with_timeout(Duration::from_secs(2));
+    DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::from_secs(2));
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 
@@ -201,17 +203,15 @@ where bypassing is intentional, such as a high-throughput action endpoint.
 
 ```rust
 # use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
-# use doorman::{IpKey, Policy, RequestRateLimiter};
+# use doorman::Policy;
 # use ipnet::IpNet;
 # use std::num::NonZeroU32;
-# use std::sync::Arc;
-# let policy = Policy::per_second(
-#     NonZeroU32::new(200).unwrap(),
-#     NonZeroU32::new(400).unwrap(),
-# );
-# let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
+# let policy = Policy {
+#     rate_per_second: NonZeroU32::new(200).unwrap(),
+#     burst: NonZeroU32::new(400).unwrap(),
+# };
 # let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-let strategy = RequestCountByIp::with_limiter(limiter, extractor)
+let strategy = RequestCountByIp::with_policy(policy, extractor)
     .with_whitelist(["10.0.0.0/8".parse::<IpNet>().unwrap()]);
 let layer = RateLimitLayer::with_strategy(strategy);
 ```

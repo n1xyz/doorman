@@ -7,7 +7,7 @@ use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 
 use crate::http::extract::{ClientIpExtractor, peer_addr, split_nets};
 use crate::http::layer::{RateLimitOutcome, RateLimitRejection, RateLimitStrategy};
-use crate::{DurationBudgetLimiter, IpKey, RequestRateLimiter};
+use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
 
 /// Elapsed-time budget accounting by client IP.
 ///
@@ -24,10 +24,8 @@ pub struct DurationBudgetByIp {
 
 impl DurationBudgetByIp {
     /// Creates an elapsed-time budget strategy keyed by client IP.
-    pub fn with_limiter(
-        limiter: Arc<DurationBudgetLimiter<IpKey>>,
-        extractor: ClientIpExtractor,
-    ) -> Self {
+    pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
+        let limiter = Arc::new(DurationBudgetLimiter::new(policy));
         Self {
             limiter,
             extractor,
@@ -41,7 +39,7 @@ impl DurationBudgetByIp {
         self
     }
 
-    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
+    fn prepare_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
         let (_, key) = extract_ip_key(&self.extractor, req)?;
 
         req.extensions_mut().insert(key);
@@ -53,7 +51,7 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
     type State = IpKey;
 
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
-        self.check_before_request(req)
+        self.prepare_request(req)
     }
 
     fn after_response(
@@ -76,7 +74,7 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
 ///
 /// This is the built-in [`RateLimitStrategy`] for the common HTTP case: extract
 /// the real client IP, optionally bypass whitelisted networks, consume one
-/// request unit, and store the resulting [`IpKey`] in request extensions.
+/// request unit, and store the resolved client identity for downstream code.
 #[derive(Clone)]
 pub struct RequestCountByIp {
     limiter: Arc<RequestRateLimiter<IpKey>>,
@@ -87,10 +85,8 @@ pub struct RequestCountByIp {
 
 impl RequestCountByIp {
     /// Creates a request-counting strategy keyed by client IP.
-    pub fn with_limiter(
-        limiter: Arc<RequestRateLimiter<IpKey>>,
-        extractor: ClientIpExtractor,
-    ) -> Self {
+    pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
+        let limiter = Arc::new(RequestRateLimiter::new(policy));
         Self {
             limiter,
             extractor,
@@ -116,7 +112,7 @@ impl RequestCountByIp {
         }
     }
 
-    fn check_before_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
+    fn prepare_request<B>(&self, req: &mut Request<B>) -> Result<(), RateLimitRejection> {
         let (ip, key) = extract_ip_key(&self.extractor, req)?;
 
         if self.is_whitelisted(ip) {
@@ -125,7 +121,7 @@ impl RequestCountByIp {
         }
 
         self.limiter
-            .check_request(&key)
+            .consume_request(&key)
             .map_err(RateLimitRejection::Limited)?;
 
         req.extensions_mut().insert(key);
@@ -137,7 +133,7 @@ impl<B> RateLimitStrategy<B> for RequestCountByIp {
     type State = ();
 
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
-        self.check_before_request(req)
+        self.prepare_request(req)
     }
 }
 
