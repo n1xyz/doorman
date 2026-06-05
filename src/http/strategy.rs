@@ -6,7 +6,7 @@ use http::Request;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 
 use crate::http::extract::{ClientIpExtractor, peer_addr, split_nets};
-use crate::http::layer::{RateLimitOutcome, RateLimitRejection, RateLimitStrategy};
+use crate::http::layer::{RateLimitRejection, RateLimitStrategy};
 use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
 
 /// Elapsed-time budget accounting by client IP.
@@ -57,7 +57,6 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
     fn after_response(
         &self,
         state: Self::State,
-        _outcome: RateLimitOutcome,
         elapsed: Duration,
     ) -> Result<(), RateLimitRejection> {
         self.limiter

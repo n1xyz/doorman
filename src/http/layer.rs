@@ -9,10 +9,15 @@ use tower::{Layer, Service};
 
 use crate::RateLimitError;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateLimitOutcome {
+    /// The inner service completed with a response status.
     ResponseStatus(StatusCode),
+
+    /// The inner service future returned an error.
     ServiceError,
+
+    /// This layer's configured timeout fired before the inner service completed.
     Timeout,
 }
 
@@ -57,16 +62,32 @@ pub trait RateLimitStrategy<B>: Clone {
     /// rejection response without calling the inner service.
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection>;
 
-    /// Accounts for completed or timed-out work after the inner service future
-    /// finishes or is cancelled by this layer's timeout.
+    /// Accounts for completed or timed-out work after the inner service runs.
+    ///
+    /// This compatibility hook does not receive the response outcome. Strategies
+    /// that need status, service-error, or timeout information should override
+    /// [`RateLimitStrategy::after_response_with_outcome`] instead.
     fn after_response(
+        &self,
+        state: Self::State,
+        elapsed: Duration,
+    ) -> Result<(), RateLimitRejection> {
+        let _ = (state, elapsed);
+        Ok(())
+    }
+
+    /// Accounts for completed or timed-out work with the inner service outcome.
+    ///
+    /// The default delegates to [`RateLimitStrategy::after_response`] so
+    /// existing strategies that override the older hook continue to work.
+    fn after_response_with_outcome(
         &self,
         state: Self::State,
         outcome: RateLimitOutcome,
         elapsed: Duration,
     ) -> Result<(), RateLimitRejection> {
-        let _ = (state, outcome, elapsed);
-        Ok(())
+        let _ = outcome;
+        self.after_response(state, elapsed)
     }
 
     /// Returns a maximum duration for the inner service future, if this strategy
@@ -187,7 +208,7 @@ where
                                     let state = state
                                         .take()
                                         .expect("state is present until response completes");
-                                    let after = strategy.after_response(
+                                    let after = strategy.after_response_with_outcome(
                                         state,
                                         RateLimitOutcome::Timeout,
                                         elapsed,
@@ -219,7 +240,7 @@ where
 
                         match result {
                             Ok(response) => {
-                                let after = strategy.after_response(
+                                let after = strategy.after_response_with_outcome(
                                     state,
                                     RateLimitOutcome::ResponseStatus(response.status()),
                                     elapsed,
@@ -236,7 +257,7 @@ where
                                 }
                             }
                             Err(err) => {
-                                let after = strategy.after_response(
+                                let after = strategy.after_response_with_outcome(
                                     state,
                                     RateLimitOutcome::ServiceError,
                                     elapsed,
@@ -342,7 +363,6 @@ mod tests {
         fn after_response(
             &self,
             _state: Self::State,
-            _outcome: RateLimitOutcome,
             _elapsed: Duration,
         ) -> Result<(), RateLimitRejection> {
             self.called.set(true);
@@ -363,7 +383,6 @@ mod tests {
         fn after_response(
             &self,
             _state: Self::State,
-            _outcome: RateLimitOutcome,
             _elapsed: Duration,
         ) -> Result<(), RateLimitRejection> {
             Err(RateLimitRejection::Limited(RateLimitError::limited(
@@ -387,7 +406,6 @@ mod tests {
         fn after_response(
             &self,
             _state: Self::State,
-            _outcome: RateLimitOutcome,
             _elapsed: Duration,
         ) -> Result<(), RateLimitRejection> {
             self.called.set(true);
@@ -401,8 +419,9 @@ mod tests {
 
     #[derive(Clone)]
     struct OutcomeObserver {
-        service_error_seen: Rc<Cell<bool>>,
+        outcome_seen: Rc<Cell<Option<RateLimitOutcome>>>,
         called: Rc<Cell<bool>>,
+        timeout: Option<Duration>,
     }
 
     impl<B> RateLimitStrategy<B> for OutcomeObserver {
@@ -412,16 +431,19 @@ mod tests {
             Ok(())
         }
 
-        fn after_response(
+        fn after_response_with_outcome(
             &self,
             _state: Self::State,
             outcome: RateLimitOutcome,
             _elapsed: Duration,
         ) -> Result<(), RateLimitRejection> {
             self.called.set(true);
-            self.service_error_seen
-                .set(matches!(outcome, RateLimitOutcome::ServiceError));
+            self.outcome_seen.set(Some(outcome));
             Ok(())
+        }
+
+        fn timeout(&self, _state: &Self::State) -> Option<Duration> {
+            self.timeout
         }
     }
 
@@ -630,18 +652,70 @@ mod tests {
 
     #[tokio::test]
     async fn custom_strategy_receives_service_error_outcome() {
-        let service_error_seen = Rc::new(Cell::new(false));
+        let outcome_seen = Rc::new(Cell::new(None));
         let called = Rc::new(Cell::new(false));
         let strategy = OutcomeObserver {
-            service_error_seen: Rc::clone(&service_error_seen),
+            outcome_seen: Rc::clone(&outcome_seen),
             called: Rc::clone(&called),
+            timeout: None,
         };
         let mut service = RateLimitLayer::with_strategy(strategy).layer(error_service());
 
         let response = service.ready().await.unwrap().call(request(None)).await;
         assert!(response.is_err());
         assert!(called.get());
-        assert!(service_error_seen.get());
+        assert_eq!(outcome_seen.get(), Some(RateLimitOutcome::ServiceError));
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_receives_response_status_outcome() {
+        let outcome_seen = Rc::new(Cell::new(None));
+        let called = Rc::new(Cell::new(false));
+        let strategy = OutcomeObserver {
+            outcome_seen: Rc::clone(&outcome_seen),
+            called: Rc::clone(&called),
+            timeout: None,
+        };
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(called.get());
+        assert_eq!(
+            outcome_seen.get(),
+            Some(RateLimitOutcome::ResponseStatus(StatusCode::OK))
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_strategy_receives_timeout_outcome() {
+        let outcome_seen = Rc::new(Cell::new(None));
+        let called = Rc::new(Cell::new(false));
+        let strategy = OutcomeObserver {
+            outcome_seen: Rc::clone(&outcome_seen),
+            called: Rc::clone(&called),
+            timeout: Some(Duration::ZERO),
+        };
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(pending_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(None))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(called.get());
+        assert_eq!(outcome_seen.get(), Some(RateLimitOutcome::Timeout));
     }
 
     #[tokio::test]

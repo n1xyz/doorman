@@ -154,11 +154,12 @@ accounting keyed by client IP, with an optional per-request timeout.
 Applications that need a different key or policy can provide their own type that
 implements `RateLimitStrategy`.
 
-Strategies have three lifecycle hooks: `before_request`, `after_response`, and
-an optional `timeout`. If a timeout fires before the inner service future
-resolves, the layer returns `429 Too Many Requests` and still runs
-`after_response` so elapsed work can be accounted. Timeout drops the inner
-future, but only async work that respects cancellation is actually stopped.
+Strategies can use `before_request`, `after_response`, the outcome-aware
+`after_response_with_outcome`, and an optional `timeout`. If a timeout fires
+before the inner service future resolves, the layer returns
+`429 Too Many Requests` and still runs the after-response hook so elapsed work
+can be accounted. Timeout drops the inner future, but only async work that
+respects cancellation is actually stopped.
 
 ```rust
 use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
