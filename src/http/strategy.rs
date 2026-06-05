@@ -26,6 +26,18 @@ impl DurationBudgetByIp {
     /// Creates an elapsed-time budget strategy keyed by client IP.
     pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
         let limiter = Arc::new(DurationBudgetLimiter::new(policy));
+        Self::with_limiter(limiter, extractor)
+    }
+
+    /// Creates an elapsed-time budget strategy using a caller-owned limiter.
+    ///
+    /// Use this when the application needs to share limiter state or call
+    /// [`RateLimiter::retain_recent`](crate::RateLimiter::retain_recent)
+    /// periodically.
+    pub fn with_limiter(
+        limiter: Arc<DurationBudgetLimiter<IpKey>>,
+        extractor: ClientIpExtractor,
+    ) -> Self {
         Self {
             limiter,
             extractor,
@@ -86,6 +98,18 @@ impl RequestCountByIp {
     /// Creates a request-counting strategy keyed by client IP.
     pub fn with_policy(policy: Policy, extractor: ClientIpExtractor) -> Self {
         let limiter = Arc::new(RequestRateLimiter::new(policy));
+        Self::with_limiter(limiter, extractor)
+    }
+
+    /// Creates a request-counting strategy using a caller-owned limiter.
+    ///
+    /// Use this when the application needs to share limiter state or call
+    /// [`RateLimiter::retain_recent`](crate::RateLimiter::retain_recent)
+    /// periodically.
+    pub fn with_limiter(
+        limiter: Arc<RequestRateLimiter<IpKey>>,
+        extractor: ClientIpExtractor,
+    ) -> Self {
         Self {
             limiter,
             extractor,

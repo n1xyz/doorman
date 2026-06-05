@@ -314,7 +314,7 @@ fn server_error_response<B: Default>() -> Response<B> {
 mod tests {
     use super::*;
     use crate::http::{ClientIpExtractor, DurationBudgetByIp, RequestCountByIp};
-    use crate::{IpKey, Policy};
+    use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
     use http::header::RETRY_AFTER;
     use ipnet::IpNet;
     use std::cell::Cell;
@@ -322,6 +322,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::num::NonZeroU32;
     use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::Duration;
     use tower::ServiceExt;
     use tower::service_fn;
@@ -716,6 +717,65 @@ mod tests {
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert!(called.get());
         assert_eq!(outcome_seen.get(), Some(RateLimitOutcome::Timeout));
+    }
+
+    #[tokio::test]
+    async fn request_count_by_ip_can_use_caller_owned_limiter() {
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
+        let limiter = Arc::new(RequestRateLimiter::new(policy));
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = RequestCountByIp::with_limiter(Arc::clone(&limiter), extractor);
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(ok_service());
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        limiter.retain_recent();
+    }
+
+    #[tokio::test]
+    async fn duration_budget_by_ip_can_use_caller_owned_limiter() {
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
+        let limiter = Arc::new(DurationBudgetLimiter::new(policy));
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = DurationBudgetByIp::with_limiter(Arc::clone(&limiter), extractor);
+        let mut service =
+            RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        limiter.retain_recent();
     }
 
     #[tokio::test]

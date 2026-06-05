@@ -154,6 +154,11 @@ accounting keyed by client IP, with an optional per-request timeout.
 Applications that need a different key or policy can provide their own type that
 implements `RateLimitStrategy`.
 
+For the built-in IP strategies, `with_policy` is the simple construction path:
+the strategy creates and owns its limiter internally. Use `with_limiter` when
+the application needs to own the limiter handle too, such as for periodic
+`retain_recent` cleanup or for sharing the same bucket across multiple layers.
+
 Strategies can use `before_request`, `after_response`, the outcome-aware
 `after_response_with_outcome`, and an optional `timeout`. If a timeout fires
 before the inner service future resolves, the layer returns
@@ -175,6 +180,30 @@ let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<I
 
 let strategy = RequestCountByIp::with_policy(policy, extractor);
 let layer = RateLimitLayer::with_strategy(strategy);
+```
+
+Caller-owned limiter state is useful when the application needs lifecycle
+control over the bucket:
+
+```rust
+use doorman::http::{ClientIpExtractor, RateLimitLayer, RequestCountByIp};
+use doorman::{IpKey, Policy, RequestRateLimiter};
+use ipnet::IpNet;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+
+let policy = Policy {
+    rate_per_second: NonZeroU32::new(200).unwrap(),
+    burst: NonZeroU32::new(400).unwrap(),
+};
+let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+
+let limiter = Arc::new(RequestRateLimiter::<IpKey>::new(policy));
+let strategy = RequestCountByIp::with_limiter(Arc::clone(&limiter), extractor);
+let layer = RateLimitLayer::with_strategy(strategy);
+
+// In application maintenance code:
+limiter.retain_recent();
 ```
 
 Elapsed-time budgets use the same layer with a different strategy. The elapsed

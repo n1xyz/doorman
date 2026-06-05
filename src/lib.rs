@@ -17,6 +17,11 @@
 //! completes, and provide an optional timeout. Route classification and bucket
 //! composition remain application responsibilities.
 //!
+//! Built-in HTTP strategies provide `with_policy` for simple construction and
+//! `with_limiter` for applications that need to own the limiter handle, for
+//! example to call [`RateLimiter::retain_recent`] from a maintenance task or to
+//! share one bucket across multiple layers.
+//!
 //! # Bucket composition
 //!
 //! Use separate limiter objects for separate buckets. For example, an
