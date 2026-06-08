@@ -150,7 +150,11 @@ used directly.
 by client IP: it extracts the client IP, applies whitelist bypasses, consumes
 one request unit, and stores the resolved client identity for downstream code.
 `DurationBudgetByIp` is the built-in strategy for elapsed inner-service time
-accounting keyed by client IP, with an optional per-request timeout.
+accounting keyed by client IP, with an optional per-request timeout. It reserves
+500ms of duration budget before the inner service runs by default, then charges
+only elapsed time above that reserved amount after the service completes. If the
+preflight reservation fails, the layer returns `429 Too Many Requests` before
+calling the inner service.
 Applications that need a different key or policy can provide their own type that
 implements `RateLimitStrategy`.
 
@@ -208,7 +212,8 @@ limiter.retain_recent();
 
 Elapsed-time budgets use the same layer with a different strategy. The elapsed
 duration is measured until the inner service future resolves; response body
-streaming after that point is not included.
+streaming after that point is not included. The default preflight reservation is
+500ms, and callers can override it with `with_preflight_cost`.
 
 ```rust
 use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
@@ -223,8 +228,9 @@ let policy = Policy {
 };
 let extractor = ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 
-let strategy =
-    DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::from_secs(2));
+let strategy = DurationBudgetByIp::with_policy(policy, extractor)
+    .with_preflight_cost(Duration::from_millis(500))
+    .with_timeout(Duration::from_secs(2));
 let layer = RateLimitLayer::with_strategy(strategy);
 ```
 

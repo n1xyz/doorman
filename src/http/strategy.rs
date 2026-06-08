@@ -9,17 +9,26 @@ use crate::http::extract::{ClientIpExtractor, peer_addr, split_nets};
 use crate::http::layer::{RateLimitRejection, RateLimitStrategy};
 use crate::{DurationBudgetLimiter, IpKey, Policy, RequestRateLimiter};
 
+/// Request state stored by [`DurationBudgetByIp`] while the inner service runs.
+pub struct DurationBudgetState {
+    key: IpKey,
+    preflight_cost: Duration,
+}
+
 /// Elapsed-time budget accounting by client IP.
 ///
 /// This built-in [`RateLimitStrategy`] extracts the real client IP before the
-/// inner service runs, then charges the elapsed inner-service future duration
-/// after it completes. The measured duration does not include full response body
-/// streaming after the response future resolves.
+/// inner service runs and reserves a default 500ms budget before expensive work
+/// starts. If the reservation fails, the layer rejects the request before
+/// calling the inner service. After the service completes, the strategy charges
+/// elapsed time above the reserved amount. The measured duration does not
+/// include full response body streaming after the response future resolves.
 #[derive(Clone)]
 pub struct DurationBudgetByIp {
     limiter: Arc<DurationBudgetLimiter<IpKey>>,
     extractor: ClientIpExtractor,
     timeout: Option<Duration>,
+    preflight_cost: Duration,
 }
 
 impl DurationBudgetByIp {
@@ -42,6 +51,7 @@ impl DurationBudgetByIp {
             limiter,
             extractor,
             timeout: None,
+            preflight_cost: Duration::from_millis(500),
         }
     }
 
@@ -51,16 +61,35 @@ impl DurationBudgetByIp {
         self
     }
 
-    fn prepare_request<B>(&self, req: &mut Request<B>) -> Result<IpKey, RateLimitRejection> {
+    /// Sets the duration budget consumed before the inner service runs.
+    ///
+    /// If this preflight charge fails, the request is rejected before expensive
+    /// work starts. After the inner service completes, only elapsed time above
+    /// this preflight cost is consumed. The default preflight cost is 500ms.
+    pub fn with_preflight_cost(mut self, cost: Duration) -> Self {
+        self.preflight_cost = cost;
+        self
+    }
+
+    fn prepare_request<B>(
+        &self,
+        req: &mut Request<B>,
+    ) -> Result<DurationBudgetState, RateLimitRejection> {
         let (_, key) = extract_ip_key(&self.extractor, req)?;
 
         req.extensions_mut().insert(key);
-        Ok(key)
+        self.limiter
+            .consume_duration(&key, self.preflight_cost)
+            .map_err(RateLimitRejection::Limited)?;
+        Ok(DurationBudgetState {
+            key,
+            preflight_cost: self.preflight_cost,
+        })
     }
 }
 
 impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
-    type State = IpKey;
+    type State = DurationBudgetState;
 
     fn before_request(&self, req: &mut Request<B>) -> Result<Self::State, RateLimitRejection> {
         self.prepare_request(req)
@@ -71,8 +100,9 @@ impl<B> RateLimitStrategy<B> for DurationBudgetByIp {
         state: Self::State,
         elapsed: Duration,
     ) -> Result<(), RateLimitRejection> {
+        let extra = elapsed.saturating_sub(state.preflight_cost);
         self.limiter
-            .consume_duration(&state, elapsed)
+            .consume_duration(&state.key, extra)
             .map_err(RateLimitRejection::Limited)
     }
 

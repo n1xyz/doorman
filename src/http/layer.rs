@@ -755,8 +755,8 @@ mod tests {
     #[tokio::test]
     async fn duration_budget_by_ip_can_use_caller_owned_limiter() {
         let policy = Policy {
-            rate_per_second: NonZeroU32::new(1).unwrap(),
-            burst: NonZeroU32::new(1).unwrap(),
+            rate_per_second: NonZeroU32::new(1_000).unwrap(),
+            burst: NonZeroU32::new(1_000).unwrap(),
         };
         let limiter = Arc::new(DurationBudgetLimiter::new(policy));
         let extractor =
@@ -773,9 +773,40 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.status(), StatusCode::OK);
 
         limiter.retain_recent();
+    }
+
+    #[tokio::test]
+    async fn duration_budget_by_ip_default_preflight_rejects_before_inner_service_runs() {
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1).unwrap(),
+            burst: NonZeroU32::new(1).unwrap(),
+        };
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = DurationBudgetByIp::with_policy(policy, extractor);
+        let called = Rc::new(Cell::new(false));
+        let called_by_service = Rc::clone(&called);
+        let inner = service_fn(move |_req: Request<()>| {
+            called_by_service.set(true);
+            async {
+                Ok::<_, Infallible>(Response::builder().status(StatusCode::OK).body(()).unwrap())
+            }
+        });
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(inner);
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(!called.get());
     }
 
     #[tokio::test]
@@ -786,7 +817,8 @@ mod tests {
         };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
-        let strategy = DurationBudgetByIp::with_policy(policy, extractor);
+        let strategy =
+            DurationBudgetByIp::with_policy(policy, extractor).with_preflight_cost(Duration::ZERO);
         let mut service =
             RateLimitLayer::with_strategy(strategy).layer(sleep_service(Duration::from_millis(2)));
 
@@ -802,10 +834,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duration_budget_by_ip_charges_only_elapsed_time_above_preflight_cost() {
+        let policy = Policy {
+            rate_per_second: NonZeroU32::new(1_000).unwrap(),
+            burst: NonZeroU32::new(1_000).unwrap(),
+        };
+        let extractor =
+            ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
+        let strategy = DurationBudgetByIp::with_policy(policy, extractor);
+        let mut service = RateLimitLayer::with_strategy(strategy).layer(ok_service());
+
+        let first = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = service
+            .ready()
+            .await
+            .unwrap()
+            .call(request(Some("1.2.3.4")))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn duration_budget_by_ip_timeout_returns_429() {
         let policy = Policy {
-            rate_per_second: NonZeroU32::new(10).unwrap(),
-            burst: NonZeroU32::new(10).unwrap(),
+            rate_per_second: NonZeroU32::new(1_000).unwrap(),
+            burst: NonZeroU32::new(1_000).unwrap(),
         };
         let extractor =
             ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);

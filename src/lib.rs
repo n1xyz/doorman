@@ -89,6 +89,9 @@
 //! The HTTP layer can also account elapsed inner-service future time with
 //! [`http::DurationBudgetByIp`]. This measures until the inner service future
 //! resolves; it does not include response body streaming after that point.
+//! `DurationBudgetByIp` reserves 500ms of budget before the inner service runs
+//! by default, then charges only elapsed time above that reserved amount after
+//! the service completes.
 //!
 //! ```rust
 //! use doorman::http::{ClientIpExtractor, DurationBudgetByIp, RateLimitLayer};
@@ -104,8 +107,9 @@
 //! let extractor =
 //!     ClientIpExtractor::with_trusted_proxies(["127.0.0.0/8".parse::<IpNet>().unwrap()]);
 //!
-//! let strategy =
-//!     DurationBudgetByIp::with_policy(policy, extractor).with_timeout(Duration::from_secs(2));
+//! let strategy = DurationBudgetByIp::with_policy(policy, extractor)
+//!     .with_preflight_cost(Duration::from_millis(500))
+//!     .with_timeout(Duration::from_secs(2));
 //! let layer = RateLimitLayer::with_strategy(strategy);
 //! # let _ = layer;
 //! ```
